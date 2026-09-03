@@ -1,0 +1,2890 @@
+const { Bot, InlineKeyboard } = require("grammy");
+const cron = require("node-cron");
+const mongoose = require("mongoose");
+
+// ==========================================
+// 1. МОДЕЛИ И СХЕМЫ БАЗЫ ДАННЫХ MONGODB
+// ==========================================
+
+const bookingSchema = new mongoose.Schema({
+    userId: { type: Number, required: true },
+    clientName: { type: String, required: true },
+    username: { type: String, default: "" },
+    serviceKey: { type: String, required: true },
+    date: { type: String },
+    dateText: { type: String, required: true },
+    time: { type: String, required: true },
+    status: { type: String, default: "pending" },
+    reminderSent: { type: Boolean, default: false },
+    pendingMessageId: { type: Number },
+    adminMessageId: { type: Number }
+});
+const Booking = mongoose.model("Booking", bookingSchema);
+
+const settingsSchema = new mongoose.Schema({
+    masterUsername: { type: String, default: "wwkmldm" },
+    phone: { type: String, default: "+998 90 123 45 67" },
+    schedule: { type: String, default: "10:00 - 20:00 (Без выходных)" },
+    instagram: { type: String, default: "https://instagram.com/" },
+    address: { type: String, default: "г. Ташкент, ул. Амира Темура, 1" },
+    aboutText: { type: String, default: "Добро пожаловать в наш салон! Мы делаем лучший маникюр." },
+    portfolioText: { type: String, default: "📸 Наши работы\nДля просмотра переходите в Instagram! ✨" },
+    
+    // 👇 ВОТ ТРИ НОВЫЕ СТРОЧКИ ДЛЯ ГЛАВНОГО МЕНЮ 👇
+    mainMenuPhoto: { type: String, default: "" }, 
+    welcomeTextRu: { type: String, default: "Привет, {name}! 👋\nДобро пожаловать в нашу студию.\nВыберите нужный раздел:" },
+    welcomeTextUz: { type: String, default: "Salom, {name}! 👋\nBizning studiyamizga xush kelibsiz.\nKerakli bo'limni tanlang:" }
+}); 
+const Settings = mongoose.model("Settings", settingsSchema);
+const serviceSchema = new mongoose.Schema({
+    key: { type: String, required: true, unique: true },
+    name: {
+        ru: { type: String, required: true },
+        uz: { type: String, required: true }
+    },
+    price: { type: String, required: true },
+    description: {
+        ru: { type: String, default: "" },
+        uz: { type: String, default: "" }
+    },
+    image: { type: String, default: "" },
+    isActive: { type: Boolean, default: true }
+});
+const Service = mongoose.model("Service", serviceSchema);
+
+// ==========================================
+// 2. ИНИЦИАЛИЗАЦИЯ И ПОДКЛЮЧЕНИЕ К БАЗЕ
+// ==========================================
+
+async function initDatabase() {
+    try {
+        const settingsCount = await Settings.countDocuments();
+        if (settingsCount === 0) {
+            await Settings.create({
+                masterUsername: "wwkmldm",
+                phone: "+998 90 123 45 67",
+                schedule: "10:00 - 20:00 (Без выходных)",
+                instagram: "https://instagram.com/",
+                address: "г. Ташкент, ул. Амира Темура, 1"
+            });
+            console.log("ℹ️ Начальные настройки салона успешно созданы в MongoDB.");
+        }
+        // Перенос из старого хардкода удален, чтобы избежать крашей
+    } catch (err) {
+        console.error("❌ Ошибка при инициализации базы данных:", err);
+    }
+}
+
+const DB_USER = "baxtiyorovusmon30_db_user";
+const DB_PASS = encodeURIComponent("7MSV5O9ttCpiZCHL");
+const MONGO_URI = `mongodb+srv://${DB_USER}:${DB_PASS}@cluster0.wdiu32k.mongodb.net/salon_db?retryWrites=true&w=majority`;
+
+const BOT_TOKEN = "8913984681:AAGkZFjBP6bnisOkhyin3Ujtuov3xuPKxvM";
+const MASTER_CHAT_ID = "1459629617";
+const bot = new Bot(BOT_TOKEN);
+
+mongoose.connect(MONGO_URI)
+    .then(async () => {
+        console.log("✅ Успешно подключено к облачной базе MongoDB Atlas!");
+        await initDatabase();
+        bot.start({
+            onStart: (botInfo) => {
+                console.log(`🤖 Бот @${botInfo.username} успешно запущен и слушает Telegram!`);
+            }
+        });
+    })
+    .catch(err => {
+        console.error("❌ Ошибка подключения к MongoDB Atlas:", err.message);
+    });
+
+// ==========================================
+// 3. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (СЕССИИ)
+// ==========================================
+const adminSessions = {};
+const clientSessions = {}; // Заранее объявляем для клиентской части
+
+// ==========================================
+// 4. ОБРАБОТЧИК ТЕКСТА АДМИНА (Добавление/Редакт)
+// ==========================================
+bot.on("message:text", async (ctx, next) => {
+
+
+    const adminId = ctx.from.id;
+    const session = adminSessions[adminId];
+
+    if (!session) {
+        return next(); 
+    }
+    
+    const text = ctx.message.text;
+    const kbCancel = new InlineKeyboard().text("❌ Отмена", "cancel_admin_action");
+
+    // --- БЛОК 1: РЕДАКТИРОВАНИЕ СУЩЕСТВУЮЩЕЙ УСЛУГИ ---
+    if (session.action === "editing_price") {
+        try {
+            await Service.findByIdAndUpdate(session.serviceId, { price: text });
+            const savedId = session.serviceId;
+            delete adminSessions[adminId];
+            const kb = new InlineKeyboard().text("🔙 Вернуться к услуге", `edit_srv_${savedId}`);
+            return ctx.reply("✅ <b>Цена успешно обновлена!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) {
+            return ctx.reply("❌ Произошла ошибка при обновлении цены.");
+        }
+    }
+
+    if (session.action === "editing_name_ru") {
+        session.tempNameRu = text;
+        session.action = "editing_name_uz";
+        return ctx.reply("📝 Отлично! Теперь введите новое <b>НАЗВАНИЕ</b> на <b>УЗБЕКСКОМ</b> языке:", { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    
+    if (session.action === "editing_name_uz") {
+        try {
+            await Service.findByIdAndUpdate(session.serviceId, { "name.ru": session.tempNameRu, "name.uz": text });
+            const savedId = session.serviceId;
+            delete adminSessions[adminId];
+            const kb = new InlineKeyboard().text("🔙 Вернуться к услуге", `edit_srv_${savedId}`);
+            return ctx.reply("✅ <b>Название успешно обновлено!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) { return ctx.reply("❌ Ошибка при обновлении названия."); }
+    }
+
+    if (session.action === "editing_desc_ru") {
+        session.tempDescRu = text;
+        session.action = "editing_desc_uz";
+        return ctx.reply("📝 Отлично! Теперь введите новое <b>ОПИСАНИЕ</b> на <b>УЗБЕКСКОМ</b> языке:", { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    
+    if (session.action === "editing_desc_uz") {
+        try {
+            await Service.findByIdAndUpdate(session.serviceId, { "description.ru": session.tempDescRu, "description.uz": text });
+            const savedId = session.serviceId;
+            delete adminSessions[adminId];
+            const kb = new InlineKeyboard().text("🔙 Вернуться к услуге", `edit_srv_${savedId}`);
+            return ctx.reply("✅ <b>Описание успешно обновлено!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) { return ctx.reply("❌ Ошибка при обновлении описания."); }
+    }
+
+    // --- БЛОК 2: ДОБАВЛЕНИЕ НОВОЙ УСЛУГИ ---
+    if (session.step === "waiting_name_ru") {
+        session.newData.name_ru = text;
+        session.step = "waiting_name_uz";
+        return ctx.reply(`Шаг 2 из 6\n\nВведите <b>название услуги на УЗБЕКСКОМ языке</b>:`, { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    if (session.step === "waiting_name_uz") {
+        session.newData.name_uz = text;
+        session.step = "waiting_price";
+        return ctx.reply(`Шаг 3 из 6\n\nВведите <b>стоимость услуги</b>:`, { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    if (session.step === "waiting_price") {
+        session.newData.price = text;
+        session.step = "waiting_desc_ru";
+        return ctx.reply(`Шаг 4 из 6\n\nВведите <b>описание услуги на РУССКОМ языке</b>:`, { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    if (session.step === "waiting_desc_ru") {
+        session.newData.desc_ru = text;
+        session.step = "waiting_desc_uz";
+        return ctx.reply(`Шаг 5 из 6\n\nВведите <b>описание услуги на УЗБЕКСКОМ языке</b>:`, { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    if (session.step === "waiting_desc_uz") {
+        session.newData.desc_uz = text;
+        session.step = "waiting_photo";
+        return ctx.reply(`Шаг 6 из 6\n\nОтправьте <b>красивую фотографию</b> для этой услуги.`, { parse_mode: "HTML", reply_markup: kbCancel });
+    }
+    if (session.step === "waiting_photo") {
+        return ctx.reply("Пожалуйста, отправьте именно ФОТО (картинку), а не текст. Или нажмите «Отмена».", { reply_markup: kbCancel });
+    }
+
+    // --- БЛОК 3: РЕДАКТИРОВАНИЕ ГЛАВНОГО МЕНЮ ---
+    if (session.action === "editing_main_text_ru") {
+        try {
+            let settings = await Settings.findOne();
+            if (!settings) settings = await Settings.create({});
+            
+            settings.welcomeTextRu = text;
+            await settings.save();
+            delete adminSessions[adminId];
+            
+            return ctx.reply("✅ <b>Текст приветствия (RU) успешно обновлен!</b>", { parse_mode: "HTML" });
+        } catch (e) {
+            return ctx.reply("❌ Ошибка при обновлении текста.");
+        }
+    }
+
+    if (session.action === "editing_main_text_uz") {
+        try {
+            let settings = await Settings.findOne();
+            if (!settings) settings = await Settings.create({});
+            
+            settings.welcomeTextUz = text;
+            await settings.save();
+            delete adminSessions[adminId];
+            
+            return ctx.reply("✅ <b>Текст приветствия (UZ) успешно обновлен!</b>", { parse_mode: "HTML" });
+        } catch (e) {
+            return ctx.reply("❌ Ошибка при обновлении текста.");
+        }
+    }
+    
+    return next(); // Пропускаем текст дальше, если он не совпал с условиями выше
+});
+
+// ==========================================
+// 5. ОБРАБОТЧИК ФОТОГРАФИЙ АДМИНА
+// ==========================================
+bot.on("message:photo", async (ctx, next) => {
+    const userId = ctx.from.id;
+    const adminSession = adminSessions[userId];
+    const clientSession = clientSessions[userId];
+
+    if (!adminSession && !clientSession) return next(); 
+
+    const photoId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+
+    // СЦЕНАРИЙ: Обновление фотографии главного меню (проверяем обе сессии)
+    if (
+        (adminSession && adminSession.action === "editing_main_photo") || 
+        (clientSession && clientSession.awaitingSettingUpdate === "mainMenuPhoto")
+    ) {
+        try {
+            let settings = await Settings.findOne();
+            if (!settings) settings = await Settings.create({});
+            
+            settings.mainMenuPhoto = photoId;
+            await settings.save();
+
+            // Очищаем состояния
+            if (adminSession) delete adminSessions[userId].action;
+            if (clientSession) {
+                delete clientSession.awaitingSettingUpdate;
+                if (clientSession.settingPromptMessageId) {
+                    try { await bot.api.deleteMessage(ctx.chat.id, clientSession.settingPromptMessageId); } catch(e){}
+                }
+            }
+            
+            const kb = new InlineKeyboard().text("🔙 Вернуться к предпросмотру", "edit_main_menu_preview");
+            return await ctx.reply("✅ <b>Фотография главного меню успешно обновлена!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) {
+            console.error(e);
+            return await ctx.reply("❌ Произошла ошибка при обновлении фотографии главного меню.");
+        }
+    }
+
+    // СЦЕНАРИЙ 1: Редактирование фото у существующей услуги
+    if (adminSession && adminSession.action === "editing_photo") {
+        try {
+            await Service.findByIdAndUpdate(adminSession.serviceId, { image: photoId });
+            const savedId = adminSession.serviceId;
+            delete adminSessions[userId];
+            const kb = new InlineKeyboard().text("🔙 Вернуться к услуге", `edit_srv_${savedId}`);
+            return await ctx.reply("✅ <b>Фотография услуги успешно обновлена!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) {
+            return await ctx.reply("❌ Произошла ошибка при обновлении фотографии.");
+        }
+    }
+
+    // СЦЕНАРИЙ 2: Финал добавления новой услуги
+    if (adminSession && adminSession.action === "adding_service" && adminSession.step === "waiting_photo") {
+        try {
+            const uniqueKey = "srv_" + Date.now(); 
+            await Service.create({
+                key: uniqueKey,
+                name: { ru: adminSession.newData.name_ru, uz: adminSession.newData.name_uz },
+                price: adminSession.newData.price,
+                description: { ru: adminSession.newData.desc_ru, uz: adminSession.newData.desc_uz },
+                image: photoId,
+                isActive: true
+            });
+            delete adminSessions[userId]; 
+            const kb = new InlineKeyboard().text("🔙 Вернуться к услугам", "manage_services");
+            return await ctx.reply("✅ <b>Услуга успешно добавлена в базу!</b>", { parse_mode: "HTML", reply_markup: kb });
+        } catch (e) {
+            return await ctx.reply("❌ Произошла ошибка при сохранении.");
+        }
+    }
+
+    return next();
+});
+// ==========================================
+// 6. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СЛОВАРИ
+// ==========================================
+const userIds = new Set(); 
+const broadcastHistory = []; 
+const cancelledBookings = [];
+
+const TIME_SLOTS = ["10:00", "12:00", "14:00", "16:00", "18:00"];
+
+const CANCEL_REASONS = [
+    "Изменились планы", 
+    "Не получается по времени", 
+    "Заболел(а)", 
+    "Другая причина"
+];
+
+const MASTER_CANCEL_REASONS = [
+    "Нет свободных мест",
+    "Мастер заболел/не работает",
+    "Технические причины",
+    "Свяжитесь со мной для уточнения"
+];
+
+const LANG = {
+    ru: {
+        welcome: "Привет, {name}! 👋\nДобро пожаловать в нашу студию. Выберите нужный раздел:",
+        main_menu_title: "✨ **Главное меню:**",
+        services: "✨ Посмотреть услуги",
+        portfolio: "📸 Наши работы",
+        my_bookings: "📅 Мои записи",
+        contacts: "📞 Контакты",
+        address: "📍 Адрес",
+        instagram: "🌐 Социальные сети",
+        back: "⬅️ В главное меню",
+        back_services: "⬅️ Назад к услугам",
+        choose_lang: "🇷🇺 Выберите язык / 🇺🇿 Tilni tanlang:",
+        no_bookings: "У вас пока нет активных записей 🤷‍♂️",
+        book_time: "📅 Выбрать время",
+        cancel_btn: "❌ Отменить"
+    },
+    uz: {
+        welcome: "Salom, {name}! 👋\nStudiyamizga xush kelibsiz. Kerakli bo'limni tanlang:",
+        main_menu_title: "✨ **Asosiy menyu:**",
+        services: "✨ Xizmatlarni ko'rish",
+        portfolio: "📸 Bizning ishlar",
+        my_bookings: "📅 Mening yozuvlarim",
+        contacts: "📞 Kontaktlar",
+        address: "📍 Manzil",
+        instagram: "🌐 Ijtimoiy tarmoqlar",
+        back: "⬅️ Asosiy menyuga",
+        back_services: "⬅️ Xizmatlarga qaytish",
+        choose_lang: "🇷🇺 Выберите язык / 🇺🇿 Tilni tanlang:",
+        no_bookings: "Sizda hozircha faol yozuvlar yo'q 🤷‍♂️",
+        book_time: "📅 Vaqtni tanlash",
+        cancel_btn: "❌ Bekor qilish"
+    }
+};
+
+const imgWelcome = "https://img.freepik.com/free-photo/top-view-manicure-tools-with-copy-space_23-2148766579.jpg"; 
+const imgCalendar = "https://img.freepik.com/free-photo/calendar-page-close-up_169016-25039.jpg"; 
+const imgSuccess = "https://img.freepik.com/free-photo/nail-artist-doing-manicure-client_23-2148766627.jpg"; 
+const imgPortfolio = "https://img.freepik.com/free-photo/female-hands-with-beautiful-manicure_169016-16053.jpg"; 
+
+const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+
+// ==========================================
+// 7. ПЛАНИРОВЩИК И УТИЛИТЫ
+// ==========================================
+
+cron.schedule("*/30 * * * *", async () => {
+    const now = new Date();
+    try {
+        const bookings = await Booking.find({ status: "confirmed", reminderSent: false });
+        
+        for (const booking of bookings) {
+            const [day, month, year] = booking.dateText.split('.').map(Number);
+            const [hours, minutes] = booking.time.split(':').map(Number);
+            const bookingDate = new Date(year, month - 1, day, hours, minutes);
+            const diffInMinutes = (bookingDate - now) / 60000;
+
+            if (diffInMinutes > 120 && diffInMinutes <= 150) {
+                try {
+                    const targetUserId = booking.userId;
+                    const userLang = clientSessions[targetUserId]?.lang || "ru";
+                    
+                    // ДОСТАЕМ УСЛУГУ ИЗ БД
+                    const serviceInfo = await Service.findOne({ key: booking.serviceKey });
+                    const serviceName = serviceInfo ? serviceInfo.name[userLang] : "Услуга";
+                    
+                    const reminderMsg = userLang === "ru"
+                        ? `⏰ **Напоминание о записи!**\n\nЗдравствуйте! Напоминаем, что сегодня в **${booking.time}** у вас запись на **${serviceName}**. Ждем вас! ✨`
+                        : `⏰ **Yozuv bo'yicha eslatma!**\n\nSalom! Eslatib o'tamiz, bugun soat **${booking.time}** da sizning **${serviceName}** xizmatiga yozuvingiz bor. Sizni kutamiz! ✨`;
+
+                    await bot.api.sendMessage(targetUserId, reminderMsg, { parse_mode: "Markdown" });
+                    
+                    booking.reminderSent = true;
+                    await booking.save();
+                } catch (e) { console.error("Ошибка отправки напоминания:", e) }
+            }
+        }
+    } catch (err) { console.error("Ошибка в cron:", err) }
+});
+
+function sortBookings(bookingsArray) {
+    return bookingsArray.sort((a, b) => {
+        const [dayA, monthA, yearA] = a.dateText.split('.').map(Number);
+        const [hourA, minA] = a.time.split(':').map(Number);
+        const dateA = new Date(yearA, monthA - 1, dayA, hourA, minA);
+
+        const [dayB, monthB, yearB] = b.dateText.split('.').map(Number);
+        const [hourB, minB] = b.time.split(':').map(Number);
+        const dateB = new Date(yearB, monthB - 1, dayB, hourB, minB);
+
+        return dateA - dateB;
+    });
+}
+
+async function refreshAdminMenu() {
+    const session = clientSessions[MASTER_CHAT_ID];
+    if (!session || !session.adminMenuMessageId) return;
+
+    try {
+        // Подгружаем все услуги для отображения названий
+        const allServices = await Service.find();
+        const serviceMap = {};
+        allServices.forEach(s => serviceMap[s.key] = s.name.ru);
+
+        if (session.currentAdminView === 'today') {
+            const today = new Date();
+            const todayStr = `${String(today.getDate()).padStart(2, '0')}.${String(today.getMonth() + 1).padStart(2, '0')}.${today.getFullYear()}`;
+            
+            const bookingsRaw = await Booking.find({ dateText: todayStr });
+            const sorted = sortBookings(bookingsRaw);
+            
+            const kb = new InlineKeyboard();
+            if (sorted.length === 0) {
+                kb.text("⬅️ Назад", "back_to_admin");
+                await bot.api.editMessageText(MASTER_CHAT_ID, session.adminMenuMessageId, `📅 **Расписание на сегодня (${todayStr}):**\n\nЗаписей нет. Можно отдыхать! ☕️`, { parse_mode: "Markdown", reply_markup: kb });
+                return;
+            }
+            let text = `📅 **Расписание на сегодня (${todayStr}) - ${sorted.length} шт.:**\n\n`;
+            sorted.forEach((b, index) => {
+                const status = b.status === "pending" ? "⏳" : "✅";
+                const sName = serviceMap[b.serviceKey] || "Удаленная услуга";
+                text += `${index + 1}. ${status} **${b.clientName}** | ${sName}\n⏰ Время: ${b.time} (${b.username})\n\n`;
+                kb.text(`🔄 Перенести №${index + 1}`, `admin_resch_${b._id}`);
+                kb.text(`❌ Отменить №${index + 1}`, `admin_rej_${b._id}`).row();
+            });
+            kb.text("⬅️ Назад", "back_to_admin");
+            await bot.api.editMessageText(MASTER_CHAT_ID, session.adminMenuMessageId, text, { parse_mode: "Markdown", reply_markup: kb });
+        
+        } else if (session.currentAdminView && session.currentAdminView.startsWith('all_')) {
+            const page = parseInt(session.currentAdminView.split('_')[1]) || 0;
+            const bookingsRaw = await Booking.find({});
+            const sorted = sortBookings(bookingsRaw);
+            
+            const kb = new InlineKeyboard();
+            if (sorted.length === 0) {
+                kb.text("⬅️ Назад", "back_to_admin");
+                await bot.api.editMessageText(MASTER_CHAT_ID, session.adminMenuMessageId, "📋 **Все записи:**\n\nПока пусто.", { parse_mode: "Markdown", reply_markup: kb });
+                return;
+            }
+            const ITEMS_PER_PAGE = 10;
+            const totalPages = Math.ceil(sorted.length / ITEMS_PER_PAGE);
+            const p = Math.min(Math.max(page, 0), totalPages - 1);
+            const currentItems = sorted.slice(p * ITEMS_PER_PAGE, (p + 1) * ITEMS_PER_PAGE);
+            let text = `📋 **Все активные записи (${sorted.length}):**\nСтраница ${p + 1} из ${totalPages}\n\n`;
+            currentItems.forEach((b, index) => {
+                const globalIndex = p * ITEMS_PER_PAGE + index + 1;
+                const status = b.status === "pending" ? "⏳" : "✅";
+                const sName = serviceMap[b.serviceKey] || "Удаленная услуга";
+                text += `${globalIndex}. ${status} **${b.clientName}** | ${sName}\n📅 ${b.dateText} в ${b.time} (${b.username})\n\n`;
+                kb.text(`🔄 Перенести №${globalIndex}`, `admin_resch_${b._id}`);
+                kb.text(`❌ Отменить №${globalIndex}`, `admin_rej_${b._id}`).row();
+            });
+            if (p > 0) kb.text("⬅️ Пред", `admin_all_bookings_${p - 1}`);
+            if (p < totalPages - 1) kb.text("След ➡️", `admin_all_bookings_${p + 1}`);
+            if (p > 0 || p < totalPages - 1) kb.row();
+            kb.text("⬅️ Назад", "back_to_admin");
+            await bot.api.editMessageText(MASTER_CHAT_ID, session.adminMenuMessageId, text, { parse_mode: "Markdown", reply_markup: kb });
+        } else {
+            session.currentAdminView = 'menu';
+            await bot.api.editMessageText(MASTER_CHAT_ID, session.adminMenuMessageId, "👨‍💻 **Панель управления мастером**\n\nЗдесь вы можете управлять своими записями.\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
+        }
+    } catch (e) { console.error("Error in refreshAdminMenu:", e); }
+}
+
+async function smartUpdate(ctx, newImageUrl, newCaption, newKeyboard) {
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+    
+    try {
+        if (clientSessions[userId].currentImage === newImageUrl) {
+            await ctx.editMessageCaption({ caption: newCaption, parse_mode: "Markdown", reply_markup: newKeyboard });
+        } else {
+            await ctx.editMessageMedia(
+                { type: "photo", media: newImageUrl, caption: newCaption, parse_mode: "Markdown" },
+                { reply_markup: newKeyboard }
+            );
+            clientSessions[userId].currentImage = newImageUrl;
+        }
+    } catch (e) {}
+}
+
+// ==========================================
+// 8. ГЕНЕРАЦИЯ КЛАВИАТУР
+// ==========================================
+
+function getLanguageKeyboard() {
+    return new InlineKeyboard().text("🇷🇺 Русский", "set_lang_ru").row().text("🇺🇿 O'zbekcha", "set_lang_uz");
+}
+
+function getMainMenuKeyboard(lang) {
+    const t = LANG[lang];
+    return new InlineKeyboard()
+        .text(t.services, "view_all_services").row()
+        .text(t.portfolio, "view_portfolio").row()
+        .text(t.my_bookings, "view_my_bookings").row()
+        .text(t.contacts, "view_contacts").row()
+        .text(t.instagram, "view_instagram").row()
+        .text(t.address, "view_address");
+}
+
+function getAdminKeyboard() {
+    return new InlineKeyboard()
+        .text("📊 Статистика", "admin_statistics").row()
+        .text("📋 Все записи", "admin_all_bookings").row()
+        .text("📅 На сегодня", "admin_today_bookings").row()
+        .text("📢 Сделать рассылку", "admin_broadcast_init").row()
+        .text("📜 История рассылок", "admin_broadcast_history").row()
+        .text("⚙️ Настройки", "admin_settings"); 
+}
+
+// ТЕПЕРЬ ФУНКЦИЯ АСИНХРОННАЯ, ТАК КАК БЕРЕТ ДАННЫЕ ИЗ БД!
+async function getServicesKeyboard(lang) {
+    const t = LANG[lang];
+    const kb = new InlineKeyboard();
+    
+    // Получаем все активные услуги из базы данных
+    const services = await Service.find({ isActive: true });
+    
+    for (const data of services) {
+        kb.text(`💅 ${data.name[lang]}`, `view_service_${data.key}`).row();
+    }
+    kb.text(t.back, "back_to_start");
+    return kb;
+}
+
+// ==========================================
+// 9. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КАЛЕНДАРЕЙ
+// ==========================================
+
+// КАЛЕНДАРЬ ДЛЯ КЛИЕНТА (ПЕРВИЧНАЯ ЗАПИСЬ)
+function createCalendarKeyboard(year, month, serviceKey, lang) {
+    // Корректировка переполнения месяцев
+    if (month < 0) { month = 11; year -= 1; }
+    if (month > 11) { month = 0; year += 1; }
+
+    const t = LANG[lang];
+    const keyboard = new InlineKeyboard();
+    keyboard.text(`🗓 ${MONTH_NAMES[month]} ${year}`, "ignore").row();
+
+    const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    daysOfWeek.forEach(day => keyboard.text(day, "ignore"));
+    keyboard.row();
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startDay = firstDayIndex === 0 ? 6 : firstDayIndex - 1; 
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    for (let i = 0; i < startDay; i++) { keyboard.text(" ", "ignore"); }
+    let currentColumn = startDay;
+    for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, month, day);
+        if (cellDate < today) {
+            keyboard.text(`🔒`, "ignore");
+        } else {
+            keyboard.text(`${day}`, `date_${year}_${month}_${day}`);
+        }
+        currentColumn++;
+        if (currentColumn === 7) { keyboard.row(); currentColumn = 0; }
+    }
+    if (currentColumn !== 0) {
+        for (let i = currentColumn; i < 7; i++) { keyboard.text(" ", "ignore"); }
+        keyboard.row();
+    }
+    keyboard.text("◀️", `m_${year}_${month - 1}`);
+    keyboard.text(t.back_services, `view_all_services`);
+    keyboard.text("▶️", `m_${year}_${month + 1}`);
+
+    return keyboard;
+}
+
+// КАЛЕНДАРЬ ДЛЯ МАСТЕРА (ПЕРЕНОС ЗАПИСИ)
+function createAdminCalendarKeyboard(year, month, bookingId) {
+    if (month < 0) { month = 11; year -= 1; }
+    if (month > 11) { month = 0; year += 1; }
+
+    const keyboard = new InlineKeyboard();
+    keyboard.text(`🗓 ${MONTH_NAMES[month]} ${year}`, "ignore").row();
+
+    const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    daysOfWeek.forEach(day => keyboard.text(day, "ignore"));
+    keyboard.row();
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startDay = firstDayIndex === 0 ? 6 : firstDayIndex - 1; 
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    for (let i = 0; i < startDay; i++) { keyboard.text(" ", "ignore"); }
+    let currentColumn = startDay;
+    for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, month, day);
+        if (cellDate < today) {
+            keyboard.text(`🔒`, "ignore");
+        } else {
+            keyboard.text(`${day}`, `admindate_${bookingId}_${year}_${month}_${day}`);
+        }
+        currentColumn++;
+        if (currentColumn === 7) { keyboard.row(); currentColumn = 0; }
+    }
+    if (currentColumn !== 0) {
+        for (let i = currentColumn; i < 7; i++) { keyboard.text(" ", "ignore"); }
+        keyboard.row();
+    }
+    keyboard.text("◀️", `am_${bookingId}_${year}_${month - 1}`);
+    keyboard.text("❌ Отмена", `back_to_admin`);
+    keyboard.text("▶️", `am_${bookingId}_${year}_${month + 1}`);
+
+    return keyboard;
+}
+
+// КАЛЕНДАРЬ ДЛЯ МАСТЕРА И КЛИЕНТА (ОБЩИЙ ПЕРЕНОС)
+function createRescheduleCalendarKeyboard(year, month, bookingId, role, lang) {
+    if (month < 0) { month = 11; year -= 1; }
+    if (month > 11) { month = 0; year += 1; }
+
+    const keyboard = new InlineKeyboard();
+    keyboard.text(`🗓 ${MONTH_NAMES[month]} ${year}`, "ignore").row();
+
+    const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    daysOfWeek.forEach(day => keyboard.text(day, "ignore"));
+    keyboard.row();
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startDay = firstDayIndex === 0 ? 6 : firstDayIndex - 1; 
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    for (let i = 0; i < startDay; i++) { keyboard.text(" ", "ignore"); }
+    let currentColumn = startDay;
+    for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, month, day);
+        if (cellDate < today) {
+            keyboard.text(`🔒`, "ignore");
+        } else {
+            keyboard.text(`${day}`, `reschdate_${role}_${bookingId}_${year}_${month}_${day}`);
+        }
+        currentColumn++;
+        if (currentColumn === 7) { keyboard.row(); currentColumn = 0; }
+    }
+    if (currentColumn !== 0) {
+        for (let i = currentColumn; i < 7; i++) { keyboard.text(" ", "ignore"); }
+        keyboard.row();
+    }
+    keyboard.text("◀️", `reschm_${role}_${bookingId}_${year}_${month - 1}`);
+    const backBtnText = role === "admin" ? "❌ Отмена" : (lang === "ru" ? "⬅️ Назад" : "⬅️ Orqaga");
+    const backBtnCb = role === "admin" ? "back_to_admin" : "view_my_bookings";
+    keyboard.text(backBtnText, backBtnCb);
+    keyboard.text("▶️", `reschm_${role}_${bookingId}_${year}_${month + 1}`);
+
+    return keyboard;
+}
+
+// ==========================================
+// 10. ЛОГИКА СТАРТА И ГЛАВНОГО МЕНЮ
+// ==========================================
+async function sendClientMenu(ctx) {
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    clientSessions[userId].awaitingName = false; 
+
+    if (!clientSessions[userId].lang) {
+        await ctx.reply(LANG.ru.choose_lang, { reply_markup: getLanguageKeyboard() });
+        return;
+    }
+
+    const lang = clientSessions[userId].lang;
+    
+    // Получаем свежие настройки из базы данных
+    const settings = await Settings.findOne();
+
+    // 1. Выбираем фото: если загружено новое в базу — используем его, иначе стандартное imgWelcome
+    const photoToSend = (settings && settings.mainMenuPhoto) ? settings.mainMenuPhoto : imgWelcome;
+
+    // 2. Выбираем текст приветствия под язык пользователя
+    let templateText;
+    if (lang === "uz") {
+        templateText = (settings && settings.welcomeTextUz) 
+            ? settings.welcomeTextUz 
+            : (LANG.uz?.welcome || "Salom, {name}! 👋");
+    } else {
+        templateText = (settings && settings.welcomeTextRu) 
+            ? settings.welcomeTextRu 
+            : (LANG.ru?.welcome || "Привет, {name}! 👋");
+    }
+
+    // Подставляем имя юзера
+    const welcomeText = templateText.replace("{name}", ctx.from.first_name || "Гость");
+
+    // Удаляем предыдущее меню, если оно было
+    if (clientSessions[userId].menuMessageId) {
+        try { await bot.api.deleteMessage(userId, clientSessions[userId].menuMessageId); } catch(e){}
+    }
+
+    clientSessions[userId].currentImage = photoToSend; 
+    
+    const res = await ctx.replyWithPhoto(photoToSend, {
+        caption: welcomeText,
+        parse_mode: "HTML",
+        reply_markup: getMainMenuKeyboard(lang)
+    });
+    
+    clientSessions[userId].menuMessageId = res.message_id;
+}
+
+bot.command("start", async (ctx) => {
+    const userId = ctx.from.id.toString();
+    
+    userIds.add(ctx.from.id);
+
+    if (userId === String(MASTER_CHAT_ID)) { 
+        try { await ctx.deleteMessage(); } catch(e) {} 
+        
+        const res = await ctx.reply("👨‍💻 <b>Панель управления мастером</b>\n\nЗдесь вы можете управлять своими записями.\nВыберите действие:", {
+            parse_mode: "HTML", 
+            reply_markup: getAdminKeyboard()
+        });
+        
+        if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+        clientSessions[ctx.from.id].adminMenuMessageId = res.message_id; 
+    } else {
+        if (clientSessions[ctx.from.id]?.menuMessageId) {
+            try { await bot.api.deleteMessage(ctx.from.id, clientSessions[ctx.from.id].menuMessageId); } catch(e) {}
+        }
+        try { await ctx.deleteMessage(); } catch(e) {}
+        
+        await sendClientMenu(ctx);
+    }
+});
+
+// ОБРАБОТЧИК ВЫБОРА РУССКОГО ЯЗЫКА
+bot.callbackQuery("set_lang_ru", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    
+    clientSessions[userId].lang = "ru";
+    
+    try { await ctx.deleteMessage(); } catch(e){}
+    await sendClientMenu(ctx);
+});
+
+// ОБРАБОТЧИК ВЫБОРА УЗБЕКСКОГО ЯЗЫКА
+bot.callbackQuery("set_lang_uz", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    
+    clientSessions[userId].lang = "uz";
+    
+    try { await ctx.deleteMessage(); } catch(e){}
+    await sendClientMenu(ctx);
+});
+// ==========================================
+// 11. ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+// ==========================================
+bot.on("message:text", async (ctx, next) => {
+
+    if (ctx.message?.text?.startsWith("/")) return next();
+    const userId = ctx.from.id;
+    const session = clientSessions[userId];
+
+    // --- 1. ОБРАБОТКА ВВОДА НОВЫХ НАСТРОЕК МАСТЕРОМ ---
+    if (session && session.awaitingSettingUpdate) {
+        const settingKey = session.awaitingSettingUpdate;
+        let newValue = ctx.message.text;
+
+        // Если мастер ввел @ перед юзернеймом - убираем его, чтобы не сломать ссылку
+        if (settingKey === "masterUsername" && newValue.startsWith("@")) {
+            newValue = newValue.substring(1);
+        }
+
+        try {
+            // Обновляем данные в базе MongoDB
+            await Settings.updateOne({}, { [settingKey]: newValue });
+
+            if (session.settingPromptMessageId) {
+                try { await bot.api.deleteMessage(ctx.chat.id, session.settingPromptMessageId); } catch(e){}
+            }
+            try { await ctx.deleteMessage(); } catch(e){}
+
+            delete session.awaitingSettingUpdate;
+            delete session.settingPromptMessageId;
+
+            // Генерируем свежее меню и отправляем его с сообщением об успехе
+            const { text, kb } = await getSettingsMenuTextAndKeyboard();
+            await ctx.reply(`✅ <b>Успешно обновлено!</b>\n\n${text}`, { 
+                parse_mode: "HTML", 
+                reply_markup: kb 
+            });
+
+        } catch (err) {
+            console.error("Ошибка при обновлении настройки:", err);
+            await ctx.reply("❌ Ошибка при сохранении. Попробуйте еще раз.", { reply_markup: getAdminKeyboard() });
+        }
+        return; 
+    }
+    
+    // --- 2. ЛОГИКА ОТПРАВКИ СООБЩЕНИЯ ОТ МАСТЕРА КЛИЕНТУ ---
+    if (session && session.awaitingMasterMessage) {
+        const bId = session.awaitingMasterMessage;
+        
+        let booking = null;
+        try {
+            booking = await Booking.findById(bId);
+        } catch (err) {
+            console.error("Ошибка при поиске записи для отправки ответа:", err);
+        }
+        
+        if (booking) {
+            const targetUserId = booking.userId;
+            const textToSend = ctx.message.text;
+            
+            try {
+                const userLang = clientSessions[targetUserId]?.lang || "ru";
+                
+                const notification = userLang === "ru" 
+                    ? `📩 **Сообщение от мастера!**\n\n💬 ${textToSend}`
+                    : `📩 **Ustadan xabar!**\n\n💬 ${textToSend}`;
+                
+                // Достаем юзернейм из настроек базы данных
+                const settings = await Settings.findOne();
+                const masterUsername = settings ? settings.masterUsername : "wwkmldm"; 
+                
+                const kbClientReply = new InlineKeyboard().url(
+                    userLang === "ru" ? "✍️ Написать мастеру" : "✍️ Ustaga yozish", 
+                    `https://t.me/${masterUsername}`
+                );
+                    
+                await bot.api.sendMessage(targetUserId, notification, { parse_mode: "Markdown", reply_markup: kbClientReply });
+                
+                const successMsg = await ctx.reply(`✅ Сообщение успешно доставлено клиенту **${booking.clientName}**!`);
+                setTimeout(async () => {
+                    try { await bot.api.deleteMessage(ctx.chat.id, successMsg.message_id); } catch(e){}
+                }, 30000);
+                
+            } catch (e) {
+                console.error(e);
+                await ctx.reply("❌ Ошибка при отправке. Возможно, клиент заблокировал бота.");
+            }
+        } else {
+            const errorMsg = await ctx.reply("❌ Запись не найдена в базе данных, отправка отменена.");
+            setTimeout(async () => {
+                try { await bot.api.deleteMessage(ctx.chat.id, errorMsg.message_id); } catch(e){}
+            }, 5000);
+        }
+        
+        if (session.msgPromptId) {
+            try { await bot.api.deleteMessage(ctx.chat.id, session.msgPromptId); } catch(e){}
+        }
+        try { await ctx.deleteMessage(); } catch(e){} 
+        
+        delete session.awaitingMasterMessage;
+        delete session.msgPromptId;
+        
+        return; 
+    }
+
+
+    // --- 3. ОБРАБОТКА РАССЫЛКИ ---
+    if (userId.toString() === MASTER_CHAT_ID && session?.awaitingBroadcast) {
+        session.awaitingBroadcast = false; 
+        const broadcastText = ctx.message.text;
+        
+        try { await ctx.deleteMessage(); } catch(e){}
+        
+        if (session.adminMenuMessageId) {
+            try { await bot.api.deleteMessage(MASTER_CHAT_ID, session.adminMenuMessageId); } catch(e){}
+        }
+        
+        const now = new Date();
+        const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth()+1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        broadcastHistory.unshift({ text: broadcastText, date: dateStr });
+        if (broadcastHistory.length > 10) broadcastHistory.pop(); 
+
+        const allUsers = new Set([...userIds, ...Object.keys(clientSessions).map(Number)]);
+
+        let successCount = 0; let failCount = 0;
+        for (const uId of allUsers) {
+            if (!uId || isNaN(uId) || uId.toString() === MASTER_CHAT_ID) continue; 
+            try {
+                await bot.api.sendMessage(uId, `📢 **Сообщение от мастера:**\n\n${broadcastText}`, { parse_mode: "Markdown" });
+                successCount++;
+            } catch (e) { failCount++; }
+        }
+        
+        const reportMsg = `✅ **Вы успешно сделали рассылку!**\n\nДоставлено клиентам: ${successCount}\nЗаблокировали бота: ${failCount}\n\n_Все рассылки находятся в истории рассылок._`;
+        
+        const res = await ctx.reply(reportMsg, { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
+        session.adminMenuMessageId = res.message_id; 
+        
+        return;
+    }
+
+    // --- 4. ОБРАБОТКА ИМЕНИ КЛИЕНТА ---
+    if (session && session.awaitingName) {
+        session.awaitingName = false;
+        const clientNameInput = ctx.message.text;
+        const lang = session.lang || "ru";
+        try { await ctx.deleteMessage(); } catch(e){} 
+
+        let serviceNameClient = lang === "ru" ? "Услуга" : "Xizmat";
+        let serviceNameAdmin = "Услуга";
+        try {
+            // ИСПРАВЛЕНИЕ: Ищем по полю 'key', а не по '_id'
+            const service = await Service.findOne({ key: session.serviceKey });
+            if (service) {
+                serviceNameClient = service.name[lang] || service.name.ru;
+                serviceNameAdmin = service.name.ru;
+            }
+        } catch (err) {
+            console.error("Ошибка при поиске названия услуги:", err);
+        }
+        
+        const newBooking = new Booking({
+            userId: userId,
+            clientName: clientNameInput, 
+            username: ctx.from.username ? `@${ctx.from.username}` : "Скрыт",
+            serviceKey: session.serviceKey, 
+            date: session.date,
+            dateText: session.dateText,
+            time: session.time,
+            status: "pending",
+            reminderSent: false
+        });
+
+        await newBooking.save();
+        const bookingId = newBooking._id.toString();
+
+        if (session.menuMessageId) {
+            try { await bot.api.deleteMessage(userId, session.menuMessageId); } catch(e){}
+        }
+
+const minimalKb = new InlineKeyboard()
+            .text(lang === "ru" ? "🏠 В главное меню" : "🏠 Asosiy menyuga", "back_to_start").row()
+            .text(lang === "ru" ? "💅 Заказать еще услугу" : "💅 Yana xizmat buyurtma qilish", "view_all_services").row()
+            .text(lang === "ru" ? "📅 Мои записи" : "📅 Mening yozuvlarim", "view_my_bookings");
+            
+        // Отправляем просто текстовое сообщение вместо фото
+        const textMenu = lang === "ru" ? "✨ Что делать дальше?" : "✨ Keyin nima qilamiz?";
+        const sentMenu = await bot.api.sendMessage(userId, textMenu, {
+            parse_mode: "Markdown", 
+            reply_markup: minimalKb
+        });
+        
+        session.menuMessageId = sentMenu.message_id;
+        session.menuMessageId = sentMenu.message_id;
+        session.currentImage = imgSuccess;
+
+        if (session.cancellationMessageId) {
+            try { 
+                await bot.api.deleteMessage(userId, session.cancellationMessageId); 
+                delete session.cancellationMessageId; 
+            } catch(e) {}
+        }
+
+        const successMsg = lang === "ru"
+            ? `⏳ **Ваша заявка отправлена мастеру!**\n\n👤 Имя: ${clientNameInput}\n💅 Услуга: ${serviceNameClient}\n📅 Дата: ${session.dateText}\n⏰ Время: ${session.time}\n\nОжидайте подтверждения!`
+            : `⏳ **Sizning arizangiz ustaga yuborildi!**\n\n👤 Ism: ${clientNameInput}\n💅 Xizmat: ${serviceNameClient}\n📅 Sana: ${session.dateText}\n⏰ Vaqt: ${session.time}\n\nTasdiqlashni kuting!`;
+
+        const pendingMsg = await bot.api.sendMessage(userId, successMsg, { parse_mode: "Markdown" });
+        
+        newBooking.pendingMessageId = pendingMsg.message_id;
+
+        try {
+            const masterKb = new InlineKeyboard()
+                .text("✅ Подтвердить", `admin_conf_${bookingId}`).row()
+                .text("🔄 Перенести", `admin_resch_${bookingId}`).row()
+                .text("❌ Отклонить", `admin_rej_${bookingId}`);
+                
+            const adminMsg = `🔔 **НОВАЯ ЗАЯВКА!**\n\n👤 Имя: **${clientNameInput}**\n🔗 ТГ: ${ctx.from.first_name} (${newBooking.username})\n💅 Услуга: ${serviceNameAdmin}\n📅 Дата: ${session.dateText}\n🕐 Время: ${session.time}`;
+            
+            const sentToAdmin = await bot.api.sendMessage(MASTER_CHAT_ID, adminMsg, { parse_mode: "Markdown", reply_markup: masterKb });
+            
+            newBooking.adminMessageId = sentToAdmin.message_id; 
+            await newBooking.save();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    
+    // Передаем управление дальше (чтобы другие обработчики могли поймать текст, если нужно)
+    return next();
+});
+
+/// ==========================================
+// 12. АДМИН-ПАНЕЛЬ: РАССЫЛКИ И НАСТРОЙКИ
+// ==========================================
+
+
+// Меню редактирования Главного экрана
+bot.callbackQuery("admin_edit_main_menu", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    
+    const kb = new InlineKeyboard()
+        .text("📸 Изменить фото", "admin_edit_main_photo").row()
+        .text("📝 Изменить текст (RU)", "admin_edit_main_text_ru").row()
+        .text("📝 Изменить текст (UZ)", "admin_edit_main_text_uz").row()
+        .text("🔙 Назад в админку", "admin_menu"); // Замени "admin_menu" на свой коллбек возврата
+        
+    await ctx.editMessageText("🛠 **Настройки Главного меню**\n\nЧто именно вы хотите изменить?", {
+        parse_mode: "Markdown",
+        reply_markup: kb
+    });
+});
+
+// Админ нажал "Изменить фото"
+bot.callbackQuery("admin_edit_main_photo", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    if (!adminSessions[ctx.from.id]) adminSessions[ctx.from.id] = {};
+    adminSessions[ctx.from.id].step = "awaiting_main_photo";
+    await ctx.reply("📸 Отправьте мне новую фотографию для главного меню:");
+});
+
+// Админ нажал "Изменить текст RU"
+bot.callbackQuery("admin_edit_main_text_ru", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    if (!adminSessions[ctx.from.id]) adminSessions[ctx.from.id] = {};
+    adminSessions[ctx.from.id].step = "awaiting_main_text_ru";
+    await ctx.reply("📝 Отправьте новый текст приветствия на русском.\n\n*Подсказка:* используйте `{name}`, чтобы бот сам подставлял имя клиента.", { parse_mode: "Markdown" });
+});
+
+bot.callbackQuery("admin_broadcast_init", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+    clientSessions[ctx.from.id].awaitingBroadcast = true;
+    clientSessions[ctx.from.id].adminMenuMessageId = ctx.callbackQuery.message.message_id;
+    await ctx.editMessageText("✍ *Отправьте текст сообщения для рассылки:*", { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("❌ Отмена", "back_to_admin") });
+});
+
+bot.callbackQuery(/^edit_srv_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const serviceId = ctx.callbackQuery.data.replace("edit_srv_", "");
+    
+    if (adminSessions[ctx.from.id]) {
+        delete adminSessions[ctx.from.id];
+    }
+
+    try {
+        const service = await Service.findById(serviceId);
+        if (!service) return;
+
+        const text = `💅 <b>Управление услугой:</b> ${service.name.ru}\n\n` +
+                     `💰 <b>Цена:</b> ${service.price}\n\n` +
+                     `📝 <b>Описание (RU):</b>\n${service.description.ru}\n\n` +
+                     `<i>Что именно вы хотите изменить?</i>`;
+
+        const kb = new InlineKeyboard()
+            .text("✏️ Изменить название", `edit_name_${serviceId}`).row()
+            .text("💰 Изменить цену", `edit_price_${serviceId}`).row()
+            .text("📝 Изменить описание", `edit_desc_${serviceId}`).row()
+            .text("🖼 Изменить фото", `edit_photo_${serviceId}`).row()
+            .text("❌ Удалить услугу", `delete_srv_${serviceId}`).row()
+            .text("🔙 Назад к списку", "manage_services");
+
+        try { await ctx.deleteMessage(); } catch(e){}
+        await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+
+    } catch (err) {
+        console.error(err);
+    }
+});
+
+bot.callbackQuery("admin_statistics", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    
+    try {
+        const activeCount = await Booking.countDocuments({ status: { $in: ["pending", "confirmed"] } });
+        const cancelledCount = await Booking.countDocuments({ status: "cancelled" });
+        const totalCount = activeCount + cancelledCount; 
+
+        const text = `📊 **Статистика бота:**\n\n` +
+                     `📈 Всего заявок: **${totalCount}**\n` +
+                     `✅ Активные: **${activeCount}**\n` +
+                     `❌ Отмененные: **${cancelledCount}**`;
+
+        const kb = new InlineKeyboard()
+            .text("❌ Посмотреть историю отмен", "admin_cancelled_list").row()
+            .text("⬅️ Назад", "back_to_admin");
+
+        await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) {
+        console.error("Ошибка статистики:", err);
+        await ctx.editMessageText("❌ Ошибка загрузки статистики.", { reply_markup: new InlineKeyboard().text("⬅️ Назад", "back_to_admin") });
+    }
+});
+
+// ==========================================
+// 13. НАСТРОЙКИ БОТА И САЛОНА
+// ==========================================
+
+async function getSettingsMenuTextAndKeyboard() {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+
+    const text = `⚙️ <b>НАСТРОЙКИ БОТА И САЛОНА</b>\n\n` +
+                 `📞 <b>Телефон:</b> ${settings.phone}\n` +
+                 `🕒 <b>График:</b> ${settings.schedule}\n` +
+                 `📍 <b>Адрес:</b> ${settings.address}\n` +
+                 `🔗 <b>Instagram:</b> ${settings.instagram}\n` +
+                 `👤 <b>Юзернейм мастера:</b> @${settings.masterUsername}\n\n` +
+                 `Выберите, какой пункт вы хотите изменить:`;
+
+    const kb = new InlineKeyboard()
+        .text("🏠 Изменить Главное меню", "edit_main_menu_preview").row() // <--- ДОБАВИЛИ СЮДА
+        .text("📞 Изменить телефон", "edit_phone").row()
+        .text("🕒 Изменить график", "edit_schedule").row()
+        .text("📍 Изменить адрес", "edit_address").row()
+        .text("🔗 Изменить Instagram", "edit_instagram").row()
+        .text("👤 Изменить Юзернейм", "edit_masterUsername").row()
+        .text("📸 Изменить 'Наши работы'", "edit_portfolioText").row()
+        .text("💅 Управление услугами", "manage_services").row()
+        .text("🔙 Назад в меню", "back_to_admin_main");
+        
+    return { text, kb };
+}
+
+bot.callbackQuery("edit_main_menu_preview", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    const settings = await Settings.findOne() || {};
+    const photoToSend = settings.mainMenuPhoto || (typeof imgWelcome !== 'undefined' ? imgWelcome : null);
+    const textRu = settings.welcomeTextRu || "Привет, {name}! 👋\nДобро пожаловать в нашу студию.";
+    
+    const previewText = `👁 <b>Предпросмотр главного меню:</b>\n\n${textRu}`;
+    
+    const kb = new InlineKeyboard()
+        .text("📸 Изменить фото", "set_main_photo").row()
+        .text("📝 Изменить описание (RU)", "set_main_text_ru").row()
+        .text("📝 Изменить описание (UZ)", "set_main_text_uz").row()
+        .text("🔙 Назад к настройкам", "back_to_settings_menu");
+        
+    try { await ctx.deleteMessage(); } catch(e){}
+    
+    if (photoToSend) {
+        await ctx.replyWithPhoto(photoToSend, { caption: previewText, parse_mode: "HTML", reply_markup: kb });
+    } else {
+        await ctx.reply(previewText, { parse_mode: "HTML", reply_markup: kb });
+    }
+});
+
+
+// 2. Нажатие на "Изменить фото" (пишем в обе сессии для надежности)
+bot.callbackQuery("set_main_photo", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    
+    if (!adminSessions[userId]) adminSessions[userId] = {};
+    adminSessions[userId].action = "editing_main_photo";
+    
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    clientSessions[userId].awaitingSettingUpdate = "mainMenuPhoto";
+    
+    try { await ctx.deleteMessage(); } catch(e){}
+    const msg = await ctx.reply("📸 Отправьте мне <b>новую фотографию</b> для Главного меню (просто пришлите картинку в чат):", { parse_mode: "HTML" });
+    clientSessions[userId].settingPromptMessageId = msg.message_id;
+});
+// Нажатие на "Изменить описание (RU)"
+bot.callbackQuery("set_main_text_ru", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    
+    clientSessions[userId].awaitingSettingUpdate = "welcomeTextRu";
+    
+    try { await ctx.deleteMessage(); } catch(e){}
+    const msg = await ctx.reply("📝 Отправьте новый <b>текст приветствия (RU)</b>:\n\n<i>Подсказка: используйте <code>{name}</code>, чтобы бот автоматически подставлял имя клиента.</i>", { parse_mode: "HTML" });
+    clientSessions[userId].settingPromptMessageId = msg.message_id;
+});
+
+// Нажатие на "Изменить описание (UZ)"
+bot.callbackQuery("set_main_text_uz", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    
+    clientSessions[userId].awaitingSettingUpdate = "welcomeTextUz";
+    
+    try { await ctx.deleteMessage(); } catch(e){}
+    const msg = await ctx.reply("📝 Отправьте новый <b>текст приветствия (UZ)</b>:\n\n<i>Подсказка: используйте <code>{name}</code>, чтобы бот подставлял имя клиента.</i>", { parse_mode: "HTML" });
+    clientSessions[userId].settingPromptMessageId = msg.message_id;
+});
+
+bot.callbackQuery("admin_settings", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const { text, kb } = await getSettingsMenuTextAndKeyboard();
+
+    try {
+        // 1. Пробуем отредактировать текст (если прошлым сообщением был текст)
+        await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+    } catch (e) {
+        // 2. Если прошлым сообщением было ФОТО, editMessageText выдаст ошибку.
+        // Перехватываем ее: удаляем сообщение с фото и отправляем чистое текстовое меню!
+        try { await ctx.deleteMessage(); } catch (_) {}
+        await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+    }
+});
+
+bot.callbackQuery("back_to_admin_main", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    try {
+        await ctx.editMessageText("👋 Добро пожаловать в панель управления, Мастер!", {
+            reply_markup: getAdminKeyboard()
+        });
+    } catch (e) {}
+});
+
+bot.callbackQuery("back_to_settings_menu", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    // Удаляем предыдущее сообщение с ФОТО
+    try { await ctx.deleteMessage(); } catch(e){}
+    
+    // Получаем и отправляем обычное меню настроек
+    const { text, kb } = await getSettingsMenuTextAndKeyboard();
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+bot.callbackQuery(["edit_phone", "edit_schedule", "edit_address", "edit_instagram", "edit_masterUsername", "edit_portfolioText"], async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+
+    const settingKey = ctx.callbackQuery.data.replace("edit_", "");
+    clientSessions[userId].awaitingSettingUpdate = settingKey;
+
+    const prompts = {
+        phone: "📞 Отправьте новый номер телефона:",
+        schedule: "🕒 Отправьте новый график работы:",
+        address: "📍 Отправьте новый адрес салона:",
+        instagram: "🔗 Отправьте новую ссылку на Instagram:",
+        masterUsername: "👤 Отправьте ваш новый юзернейм в Telegram (без @):",
+        portfolioText: "📸 Отправьте новый текст для раздела «Наши работы»:"
+    };
+
+    const kb = new InlineKeyboard().text("🔙 Отмена", "cancel_setting_update");
+
+    try {
+        await ctx.editMessageText(prompts[settingKey], { parse_mode: "HTML", reply_markup: kb });
+        clientSessions[userId].settingPromptMessageId = ctx.callbackQuery.message.message_id;
+    } catch(e) {}
+});
+
+bot.callbackQuery("cancel_setting_update", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const userId = ctx.from.id;
+    if (clientSessions[userId]) {
+        delete clientSessions[userId].awaitingSettingUpdate;
+        delete clientSessions[userId].settingPromptMessageId;
+    }
+    
+    try {
+        const { text, kb } = await getSettingsMenuTextAndKeyboard();
+        await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+    } catch (e) {
+        if (!e.message.includes("message is not modified")) console.error(e);
+    }
+});
+
+bot.callbackQuery("admin_cancelled_list", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard().text("⬅️ Назад", "admin_statistics"); 
+
+    try {
+        const cancelledBookings = await Booking.find({ status: "cancelled" }).sort({ _id: -1 }).limit(20);
+
+        if (cancelledBookings.length === 0) {
+            return await ctx.editMessageText("❌ **История отмен пуста**", { parse_mode: "Markdown", reply_markup: kb });
+        }
+
+        let text = "❌ **Последние 20 отмененных заказов:**\n\n";
+        cancelledBookings.forEach((b, i) => {
+            const whoCancelled = b.cancelledBy === "master" ? "Мастер" : "Клиент";
+            text += `${i + 1}. ${b.clientName} (${b.dateText})\nПричина: ${b.reason || "Без причины"}\nОтменил: ${whoCancelled}\n\n`;
+        });
+
+        await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) {
+        console.error("Ошибка истории отмен:", err);
+    }
+});
+
+bot.callbackQuery("admin_broadcast_history", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard().text("⬅️ Назад", "back_to_admin");
+    if (broadcastHistory.length === 0) return await ctx.editMessageText("📜 **История рассылок пуста.**", { parse_mode: "Markdown", reply_markup: kb });
+    let text = "📜 **Последние рассылки:**\n\n";
+    broadcastHistory.forEach((item) => { text += `🗓 **${item.date}**\n💬 _${item.text}_\n\n`; });
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+});
+
+// ==========================================
+// 14. ПРОСМОТР ЗАПИСЕЙ МАСТЕРОМ
+// ==========================================
+
+bot.callbackQuery("admin_all_bookings", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    
+    try {
+        // Подгружаем названия всех услуг из базы для правильного отображения
+        const allServices = await Service.find();
+        const serviceMap = {};
+        allServices.forEach(s => serviceMap[s.key] = s.name.ru);
+
+        const bookings = await Booking.find({ status: { $in: ["pending", "confirmed"] } });
+        const kb = new InlineKeyboard();
+        
+        if (bookings.length === 0) {
+            kb.text("⬅️ Назад", "back_to_admin");
+            return await ctx.editMessageText("📋 **Все записи:**\n\nПока пусто.", { parse_mode: "Markdown", reply_markup: kb });
+        }
+        
+        let text = `📋 **Все активные записи (${bookings.length}):**\n\n`;
+        bookings.forEach((b, index) => {
+            const status = b.status === "pending" ? "⏳" : "✅";
+            const serviceName = serviceMap[b.serviceKey] || "Удаленная услуга";
+            text += `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n📅 ${b.dateText} в ${b.time} (${b.username})\n\n`;
+            kb.text(`🔄 Перенести №${index + 1}`, `admin_resch_${b._id}`);
+            kb.text(`❌ Отменить №${index + 1}`, `admin_rej_${b._id}`).row();
+        });
+        kb.text("⬅️ Назад", "back_to_admin");
+        
+        await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { console.error(err); }
+});
+
+bot.callbackQuery("admin_today_bookings", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const today = new Date();
+    const todayStr = `${String(today.getDate()).padStart(2, '0')}.${String(today.getMonth() + 1).padStart(2, '0')}.${today.getFullYear()}`;
+    
+    try {
+        // Подгружаем названия всех услуг
+        const allServices = await Service.find();
+        const serviceMap = {};
+        allServices.forEach(s => serviceMap[s.key] = s.name.ru);
+
+        const bookings = await Booking.find({ dateText: todayStr, status: { $in: ["pending", "confirmed"] } });
+        const kb = new InlineKeyboard();
+
+        if (bookings.length === 0) {
+            kb.text("⬅️ Назад", "back_to_admin");
+            return await ctx.editMessageText(`📅 **Расписание на сегодня (${todayStr}):**\n\nЗаписей нет. Можно отдыхать! ☕️`, { parse_mode: "Markdown", reply_markup: kb });
+        }
+        
+        let text = `📅 **Расписание на сегодня (${todayStr}) - ${bookings.length} шт.:**\n\n`;
+        bookings.forEach((b, index) => {
+            const status = b.status === "pending" ? "⏳" : "✅";
+            const serviceName = serviceMap[b.serviceKey] || "Удаленная услуга";
+            text += `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n⏰ Время: ${b.time} (${b.username})\n\n`;
+            
+            kb.text(`🔄 Перенести №${index + 1}`, `admin_resch_${b._id}`);
+            kb.text(`❌ Отменить №${index + 1}`, `admin_rej_${b._id}`).row();
+            kb.text(`💬 Написать №${index + 1}`, `admin_msg_${b._id}`).row(); 
+        });
+        kb.text("⬅️ Назад", "back_to_admin");
+        
+        await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { console.error(err); }
+});
+
+// ==========================================
+// 15. ОБРАБОТКА ДЕЙСТВИЙ С ЗАПИСЯМИ (НАПИСАТЬ / ПЕРЕНЕСТИ)
+// ==========================================
+
+// === ОБРАБОТЧИК КНОПКИ "НАПИСАТЬ" ===
+bot.callbackQuery(/^admin_msg_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const bId = ctx.callbackQuery.data.replace("admin_msg_", "");
+    
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) return ctx.reply("❌ Запись не найдена. Возможно, она была удалена.");
+
+        if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+        clientSessions[ctx.from.id].awaitingMasterMessage = bId;
+
+        const promptMsg = await ctx.reply(`✍️ **Введите сообщение для клиента ${booking.clientName}:**\n\n_(Текст будет отправлен клиенту от имени мастера. Можно использовать эмодзи)_`, { parse_mode: "Markdown" });
+        clientSessions[ctx.from.id].msgPromptId = promptMsg.message_id;
+    } catch (err) { console.error(err); }
+});
+
+bot.callbackQuery("back_to_admin", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (clientSessions[ctx.from.id]) clientSessions[ctx.from.id].awaitingBroadcast = false;
+    await ctx.editMessageText("👨‍💻 **Панель управления мастером**\n\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
+});
+
+// ====== ЛОГИКА ПЕРЕНОСА (МАСТЕР) ======
+bot.callbackQuery(/^admin_resch_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const bId = ctx.callbackQuery.data.replace("admin_resch_", "");
+    
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена!", show_alert: true });
+
+        const now = new Date();
+        const kb = createAdminCalendarKeyboard(now.getFullYear(), now.getMonth(), bId);
+        await ctx.editMessageText(`🔄 **Перенос записи**\nКлиент: ${booking.clientName}\nТекущая дата: ${booking.dateText} ${booking.time}\n\nВыберите **новую дату** для переноса:`, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { console.error(err); }
+});
+
+bot.callbackQuery(/^am_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("am_", "").split("_");
+    const bId = parts[0];
+    let year = parseInt(parts[1]), month = parseInt(parts[2]);
+    if (month > 11) { month = 0; year++; }
+    if (month < 0) { month = 11; year--; }
+    const kb = createAdminCalendarKeyboard(year, month, bId);
+    await ctx.editMessageReplyMarkup({ reply_markup: kb });
+});
+
+bot.callbackQuery(/^admindate_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("admindate_", "").split("_");
+    const bId = parts[0];
+    const mString = String(parseInt(parts[2]) + 1).padStart(2, '0');
+    const dString = String(parts[3]).padStart(2, '0');
+    
+    const newDate = `${parts[1]}-${mString}-${dString}`;
+    const newDateText = `${dString}.${mString}.${parts[1]}`;
+
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена!", show_alert: true });
+
+        const kb = new InlineKeyboard();
+        
+        // Проверяем занятость каждого слота через базу данных асинхронно
+        for (let i = 0; i < TIME_SLOTS.length; i++) {
+            const time = TIME_SLOTS[i];
+            const isBooked = await Booking.exists({ 
+                date: newDate, 
+                time: time, 
+                status: { $in: ["pending", "confirmed"] },
+                _id: { $ne: bId } // Исключаем саму эту запись
+            });
+
+            if (isBooked) {
+                kb.text(`❌ ${time}`, `slot_already_booked`);
+            } else {
+                kb.text(time, `admintime_${bId}_${newDate}_${newDateText}_${time}`);
+            }
+            if ((i + 1) % 2 === 0) kb.row();
+        }
+        kb.row().text("❌ Отмена переноса", "back_to_admin");
+
+        await ctx.editMessageText(`🔄 Перенос записи для **${booking.clientName}**\nНовая дата: ${newDateText}\n\nВыберите **новое время**:`, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { console.error(err); }
+});
+
+
+
+// Нажатие на "Изменить фото"
+bot.callbackQuery("admin_edit_main_photo", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const adminId = ctx.from.id;
+    if (!adminSessions[adminId]) adminSessions[adminId] = {};
+    adminSessions[adminId].action = "editing_main_photo";
+    
+    const kbCancel = new InlineKeyboard().text("❌ Отмена", "cancel_admin_action");
+    await ctx.reply("📸 Отправьте новую <b>фотографию</b> для главного меню:", { parse_mode: "HTML", reply_markup: kbCancel });
+});
+
+// Нажатие на "Изменить текст RU"
+bot.callbackQuery("admin_edit_main_text_ru", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const adminId = ctx.from.id;
+    if (!adminSessions[adminId]) adminSessions[adminId] = {};
+    adminSessions[adminId].action = "editing_main_text_ru";
+    
+    const kbCancel = new InlineKeyboard().text("❌ Отмена", "cancel_admin_action");
+    await ctx.reply("📝 Введите новый <b>текст приветствия (RU)</b>:\n\n<i>Подсказка: используйте <code>{name}</code>, чтобы бот автоматически подставлял имя клиента.</i>", { parse_mode: "HTML", reply_markup: kbCancel });
+});
+
+// Нажатие на "Изменить текст UZ"
+bot.callbackQuery("admin_edit_main_text_uz", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const adminId = ctx.from.id;
+    if (!adminSessions[adminId]) adminSessions[adminId] = {};
+    adminSessions[adminId].action = "editing_main_text_uz";
+    
+    const kbCancel = new InlineKeyboard().text("❌ Отмена", "cancel_admin_action");
+    await ctx.reply("📝 Введите новый <b>текст приветствия (UZ)</b>:\n\n<i>Подсказка: используйте <code>{name}</code>, чтобы бот подставлял имя клиента.</i>", { parse_mode: "HTML", reply_markup: kbCancel });
+});
+
+// ==========================================
+// 1. ВЫБОР ДАТЫ ПРИ ПЕРЕНОСЕ (сохраняем дату в callback короче)
+// ==========================================
+bot.callbackQuery(/^admindate_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const parts = ctx.callbackQuery.data.replace("admindate_", "").split("_");
+    const bId = parts[0];
+    const mString = String(parseInt(parts[2]) + 1).padStart(2, '0');
+    const dString = String(parts[3]).padStart(2, '0');
+    
+    const newDate = `${parts[1]}-${mString}-${dString}`;
+    const newDateText = `${dString}.${mString}.${parts[1]}`;
+
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена!", show_alert: true });
+
+        const kb = new InlineKeyboard();
+        
+        for (let i = 0; i < TIME_SLOTS.length; i++) {
+            const time = TIME_SLOTS[i];
+            const isBooked = await Booking.exists({ 
+                date: newDate, 
+                time: time, 
+                status: { $in: ["pending", "confirmed"] },
+                _id: { $ne: bId } 
+            });
+
+            if (isBooked) {
+                kb.text(`❌ ${time}`, `slot_already_booked`);
+            } else {
+                // ПРАВКА: Передаем только id, дату и время. 
+                // Вместо передачи полной строки newDateText, мы передадим дату в коротком формате newDate, а текст соберем на следующем шаге.
+                kb.text(time, `admintime_${bId}_${newDate}_${time}`);
+            }
+            if ((i + 1) % 2 === 0) kb.row();
+        }
+        kb.row().text("❌ Отмена переноса", "back_to_admin");
+
+        await ctx.editMessageText(`🔄 Перенос записи для **${booking.clientName}**\nНовая дата: ${newDateText}\n\nВыберите **новое время**:`, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { 
+        console.error("Ошибка при генерации слотов для переноса:", err); 
+    }
+});
+
+// ==========================================
+// 2. ОБРАБОТКА ВЫБОРА ВРЕМЕНИ ДЛЯ ПЕРЕНОСА
+// ==========================================
+bot.callbackQuery(/^admintime_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    // Ожидаемый формат: admintime_bId_YYYY-MM-DD_HH:MM
+    const parts = ctx.callbackQuery.data.replace("admintime_", "").split("_");
+    const bId = parts[0];
+    const newDate = parts[1]; // YYYY-MM-DD
+    const newTime = parts[2]; // HH:MM
+    
+    // Красиво собираем дату обратно в формат DD.MM.YYYY для клиента
+    const dateParts = newDate.split("-");
+    const newDateText = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
+
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) {
+            return await ctx.answerCallbackQuery({ text: "Запись не найдена!", show_alert: true });
+        }
+
+        const targetUserId = booking.userId;
+        const lang = clientSessions[targetUserId]?.lang || "ru";
+        
+        if (booking.pendingMessageId) {
+            try { await bot.api.deleteMessage(targetUserId, booking.pendingMessageId); } catch(e){}
+        }
+
+        let serviceNameRu = "Услуга";
+        let serviceNameUz = "Xizmat";
+        try {
+            const service = await Service.findOne({ key: booking.serviceKey });
+            if (service) {
+                serviceNameRu = service.name.ru;
+                serviceNameUz = service.name.uz || service.name.ru;
+            }
+        } catch (e) {
+            console.error("Ошибка при получении услуги:", e);
+        }
+
+        const msg = lang === "ru" 
+            ? `🔄 **Внимание! Мастер предлагает перенести вашу запись.**\n\n💅 Услуга: ${serviceNameRu}\nПредлагаемая дата: **${newDateText}**\nПредлагаемое время: **${newTime}**\n\nВы согласны?`
+            : `🔄 **Diqqat! Usta yozuvingizni boshqa vaqtga ko'chirishni taklif qilmoqda.**\n\n💅 Xizmat: ${serviceNameUz}\nTaklif qilinayotgan sana: **${newDateText}**\nTaklif qilinayotgan vaqt: **${newTime}**\n\nRozimisiz?`;
+
+        // В кнопки согласия передаем короткие данные (дата в формате YYYY-MM-DD и время)
+        const kb = new InlineKeyboard()
+            .text(lang === "ru" ? "✅ Согласиться" : "✅ Rozi bo'lish", `client_acc_resch_${bId}_${newDate}_${newTime}`).row()
+            .text(lang === "ru" ? "❌ Отказаться (отменить запись)" : "❌ Rad etish (bekor qilish)", `client_rej_resch_${bId}`);
+
+        await bot.api.sendMessage(targetUserId, msg, { parse_mode: "Markdown", reply_markup: kb });
+        
+        await ctx.editMessageText(`✅ **Предложение о переносе отправлено клиенту!**\n\nНовое время: ${newDateText} в ${newTime}. Ожидаем ответа...`, { parse_mode: "Markdown" });
+        
+        setTimeout(async () => {
+            try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){}
+        }, 10000);
+        
+    } catch (e) {
+        console.error("❌ ОШИБКА ПРИ ПЕРЕНОСЕ ЗАПИСИ (admintime_):", e);
+        await ctx.answerCallbackQuery({ text: "Ошибка при отправке клиенту.", show_alert: true }).catch(()=>{});
+    }
+});
+
+// ==========================================
+// ОТВЕТ КЛИЕНТА НА ПЕРЕНОС (СОГЛАСИЕ)
+// ==========================================
+bot.callbackQuery(/^client_acc_resch_/, async (ctx) => {
+    // Убираем часики на кнопке
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    // Разбираем нашу новую КОРОТКУЮ строку: client_acc_resch_bId_YYYY-MM-DD_HH:MM
+    const parts = ctx.callbackQuery.data.replace("client_acc_resch_", "").split("_");
+    const bId = parts[0];
+    const newDate = parts[1]; // YYYY-MM-DD
+    const newTime = parts[2]; // HH:MM
+    
+    // Самостоятельно собираем красивую дату для текста (чтобы не передавать ее в кнопке)
+    const dateParts = newDate.split("-");
+    const newDateText = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
+
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена или удалена!", show_alert: true });
+
+        // Удаляем сообщение с вопросом у клиента
+        try { await ctx.deleteMessage(); } catch(e){}
+
+        // ОБНОВЛЯЕМ ДАННЫЕ В БД (Теперь time передается корректно!)
+        booking.date = newDate;
+        booking.dateText = newDateText;
+        booking.time = newTime;
+        booking.status = "confirmed";
+        await booking.save(); 
+
+        // Безопасно достаем название услуги
+        let serviceNameRu = "Услуга";
+        let serviceNameUz = "Xizmat";
+        try {
+            const service = await Service.findOne({ key: booking.serviceKey });
+            if (service) {
+                serviceNameRu = service.name.ru;
+                serviceNameUz = service.name.uz || service.name.ru;
+            }
+        } catch (e) {}
+
+        // Отправляем уведомление клиенту
+        const lang = clientSessions[ctx.from.id]?.lang || "ru";
+        const msgClient = lang === "ru"
+            ? `✅ **Вы успешно подтвердили перенос!**\n\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: **${newDateText}**\n🕐 Новое время: **${newTime}**\n\nЖдем вас! ✨`
+            : `✅ **Siz ko'chirishni muvaffaqiyatli tasdiqladingiz!**\n\n💅 Xizmat: ${serviceNameUz}\n📅 Yangi sana: **${newDateText}**\n🕐 Yangi vaqt: **${newTime}**\n\nSizni kutamiz! ✨`;
+        
+        await ctx.reply(msgClient, { parse_mode: "Markdown" });
+
+        // Отправляем уведомление мастеру
+        await bot.api.sendMessage(
+            MASTER_CHAT_ID, 
+            `✅ **Клиент СОГЛАСИЛСЯ на перенос**\n\n👤 Имя: ${booking.clientName}\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: ${newDateText}\n🕐 Новое время: ${newTime}`, 
+            { parse_mode: "Markdown" }
+        );
+
+    } catch (e) {
+        console.error("❌ ОШИБКА ПРИ ПОДТВЕРЖДЕНИИ ПЕРЕНОСА КЛИЕНТОМ:", e);
+        await ctx.reply("Произошла ошибка при сохранении. Обратитесь к администратору.").catch(()=>{});
+    }
+});
+
+
+
+
+
+
+
+
+// ==========================================
+// 16. КЛИЕНТСКИЙ ИНТЕРФЕЙС И ВЫБОР
+// ==========================================
+
+// --- ВЫБОР ЯЗЫКА ---
+bot.callbackQuery(/^set_lang_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const lang = ctx.callbackQuery.data.replace("set_lang_", "");
+    
+    if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+    clientSessions[ctx.from.id].lang = lang;
+    
+    const welcomeText = LANG[lang].welcome.replace("{name}", ctx.from.first_name);
+    try { await ctx.deleteMessage(); } catch(e) {}
+    
+    const res = await ctx.replyWithPhoto(imgWelcome, { 
+        caption: welcomeText, 
+        parse_mode: "Markdown", 
+        reply_markup: getMainMenuKeyboard(lang) 
+    });
+    
+    clientSessions[ctx.from.id].menuMessageId = res.message_id;
+    clientSessions[ctx.from.id].currentImage = imgWelcome;
+});
+
+bot.callbackQuery("view_portfolio", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    const kb = new InlineKeyboard().text(LANG[lang].back, "back_to_start");
+    
+    const settings = await Settings.findOne() || await Settings.create({});
+    const defaultText = lang === "ru" 
+        ? "📸 **Наши работы**\n\nДля просмотра переходите в Instagram! ✨" 
+        : "📸 **Bizning ishlar**\n\nKo'rish uchun Instagram sahifamizga o'ting! ✨";
+    
+    await smartUpdate(ctx, imgPortfolio, settings.portfolioText || defaultText, kb);
+});
+
+bot.callbackQuery("view_all_services", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    
+    try {
+        const services = await Service.find({ isActive: true });
+        const kb = new InlineKeyboard();
+        
+        if (!services || services.length === 0) {
+            const emptyText = lang === "ru" 
+                ? "❌ На данный момент доступных услуг нет." 
+                : "❌ Hozircha xizmatlar mavjud emas.";
+            kb.text(lang === "ru" ? "🔙 В главное меню" : "🔙 Asosiy menyuga", "main_menu");
+            
+            try { await ctx.deleteMessage(); } catch (e) {}
+            return await ctx.reply(emptyText, { parse_mode: "HTML", reply_markup: kb });
+        }
+
+        services.forEach(srv => {
+            if (!srv) return;
+            const srvName = srv.name?.[lang] || srv.name?.ru || srv.name?.uz || "Услуга";
+            kb.text(`💅 ${srvName}`, `view_service_${srv._id}`).row();
+        });
+
+        kb.text(lang === "ru" ? "🔙 В главное меню" : "🔙 Asosiy menyuga", "main_menu");
+
+        const text = lang === "ru" 
+            ? "✨ <b>Наши услуги</b>\n\nВыберите, что вас интересует:" 
+            : "✨ <b>Bizning xizmatlar</b>\n\nSizni nima qiziqtirayotganini tanlang:";
+
+        try { await ctx.deleteMessage(); } catch (e) {}
+        await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+        
+    } catch (e) {
+        console.error("Ошибка при выводе списка услуг:", e);
+    }
+});
+
+bot.callbackQuery("view_contacts", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    const kb = new InlineKeyboard().text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+    
+    const settings = await Settings.findOne() || await Settings.create({});
+    
+    const textRu = `📞 **Контакты**\n\n📱 Телефон: ${settings.phone}\n\n⏰ График: ${settings.schedule}\n📍 Адрес: ${settings.address}\n\n💬 Написать мастеру: @${settings.masterUsername}`;
+    const textUz = `📞 **Kontaktlar**\n\n📱 Telefon: ${settings.phone}\n\n⏰ Ish vaqti: ${settings.schedule}\n📍 Manzil: ${settings.address}\n\n💬 Ustaga yozish: @${settings.masterUsername}`;
+    
+    const text = lang === "ru" ? textRu : textUz;
+
+    // Удаляем старое сообщение с фото
+    try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+
+    // Отправляем только текст
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
+});
+
+// ==========================================
+// 17. АДМИНКА: МЕНЮ УПРАВЛЕНИЯ УСЛУГАМИ
+// ==========================================
+
+bot.callbackQuery("manage_services", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    
+    try {
+        const services = await Service.find();
+        let text = "💅 <b>Управление услугами</b>\n\n";
+        const kb = new InlineKeyboard();
+
+        if (services.length === 0) {
+            text += "<i>У вас пока нет добавленных услуг. Нажмите «Добавить», чтобы создать первую!</i>";
+        } else {
+            text += "Выберите услугу для редактирования:\n";
+            services.forEach((s) => {
+                const serviceName = (s.name && s.name.ru) ? s.name.ru : (s.title_ru || "Без названия");
+                kb.text(`✏️ ${serviceName} (${s.price})`, `edit_srv_${s._id}`).row();
+            });
+        }
+
+        kb.text("➕ Добавить новую услугу", "add_new_service").row();
+        kb.text("🔙 Назад в настройки", "admin_panel"); 
+
+        await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+    } catch (err) {
+        console.error("Ошибка в меню услуг:", err);
+    }
+});
+
+// --- ПЛАВНЫЙ ВОЗВРАТ В ОСНОВНОЕ МЕНЮ НАСТРОЕК ---
+bot.callbackQuery("admin_panel", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    
+    try {
+        let settings = await Settings.findOne();
+        if (!settings) {
+            settings = await Settings.create({});
+        }
+
+        const text = `⚙️ <b>НАСТРОЙКИ БОТА И САЛОНА</b>\n\n` +
+                     `📞 <b>Телефон:</b> ${settings.phone}\n` +
+                     `🕒 <b>График:</b> ${settings.schedule}\n` +
+                     `📍 <b>Адрес:</b> ${settings.address}\n` +
+                     `🔗 <b>Instagram:</b> ${settings.instagram}\n` +
+                     `👤 <b>Юзернейм мастера:</b> @${settings.masterUsername.replace('@', '')}\n\n` +
+                     `Выберите, какой пункт вы хотите изменить:`;
+
+        const kb = new InlineKeyboard()
+            .text("📞 Изменить телефон", "edit_phone").row()
+            .text("🕒 Изменить график", "edit_schedule").row()
+            .text("📍 Изменить адрес", "edit_address").row()
+            .text("🔗 Изменить Instagram", "edit_instagram").row()
+            .text("👤 Изменить Юзернейм", "edit_masterUsername").row() 
+            .text("📸 Изменить 'Наши работы'", "edit_portfolioText").row()
+            .text("💅 Управление услугами", "manage_services").row()
+            .text("🔙 Назад в меню", "back_to_admin_main");
+            
+        await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+
+    } catch (err) {
+        console.error("Ошибка при загрузке главного меню настроек:", err);
+        await ctx.reply("❌ Не удалось загрузить настройки салона.");
+    }
+});
+
+// --- НАЧАЛО ДОБАВЛЕНИЯ НОВОЙ УСЛУГИ ---
+bot.callbackQuery("add_new_service", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const adminId = ctx.from.id;
+    
+    adminSessions[adminId] = {
+        action: "adding_service",
+        step: "waiting_name_ru", 
+        newData: {}              
+    };
+
+    const text = `➕ <b>Добавление новой услуги</b> (Шаг 1 из 6)\n\nВведите <b>название услуги на РУССКОМ языке</b> (например, <i>💅 Премиальный Маникюр</i>):`;
+    const kb = new InlineKeyboard().text("❌ Отмена", "cancel_admin_action");
+    
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+
+
+
+
+// ==========================================
+// 18. АДМИНКА: УПРАВЛЕНИЕ И РЕДАКТИРОВАНИЕ УСЛУГ
+// ==========================================
+
+bot.callbackQuery("cancel_admin_action", async (ctx) => {
+    await ctx.answerCallbackQuery("Действие отменено").catch(()=>{});
+    const adminId = ctx.from.id;
+    
+    if (adminSessions[adminId]) {
+        delete adminSessions[adminId]; 
+    }
+
+    try {
+        const services = await Service.find();
+        const kb = new InlineKeyboard();
+        
+        services.forEach(srv => {
+            const btnName = srv.name?.ru || srv.name?.uz || srv.key;
+            kb.text(`💅 ${btnName}`, `edit_srv_${srv._id}`).row();
+        });
+        
+        kb.text("➕ Добавить услугу", "add_new_service").row(); 
+        kb.text("🔙 Назад в настройки", "admin_panel");
+
+        const text = "💅 <b>Управление услугами</b>\n\nВыберите услугу для редактирования:";
+
+        if (ctx.callbackQuery.message && !ctx.callbackQuery.message.photo) {
+            await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+        } else {
+            try { await ctx.deleteMessage(); } catch (e) {}
+            await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+        }
+    } catch (e) {
+        console.error("Ошибка при возврате в меню услуг:", e);
+        await ctx.reply("❌ Произошла ошибка при загрузке списка услуг.");
+    }
+});
+
+// УДАЛЕНИЕ УСЛУГИ
+bot.callbackQuery(/^delete_srv_/, async (ctx) => {
+    const serviceId = ctx.callbackQuery.data.replace("delete_srv_", "");
+    
+    try {
+        await Service.findByIdAndDelete(serviceId); 
+        
+        await ctx.answerCallbackQuery({ 
+            text: "🗑 Услуга успешно удалена!", 
+            show_alert: true 
+        }).catch(() => {});
+        
+        const services = await Service.find();
+        const kb = new InlineKeyboard();
+        
+        services.forEach(srv => {
+            const btnName = srv.name?.ru || srv.name?.uz || srv.key;
+            kb.text(`💅 ${btnName}`, `edit_srv_${srv._id}`).row();
+        });
+        
+        kb.text("➕ Добавить услугу", "add_new_service").row(); 
+        kb.text("🔙 Назад в настройки", "admin_panel");
+
+        const text = "💅 <b>Управление услугами</b>\n\nВыберите услугу для редактирования:";
+
+        if (ctx.callbackQuery.message && !ctx.callbackQuery.message.photo) {
+            await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+        } else {
+            try { await ctx.deleteMessage(); } catch (e) {}
+            await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+        }
+
+    } catch (e) {
+        console.error("Ошибка при удалении услуги:", e);
+        await ctx.answerCallbackQuery({ text: "❌ Ошибка при удалении", show_alert: true }).catch(() => {});
+    }
+});
+
+// ИЗМЕНИТЬ ЦЕНУ
+bot.callbackQuery(/^edit_price_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const serviceId = ctx.callbackQuery.data.replace("edit_price_", "");
+    
+    adminSessions[ctx.from.id] = {
+        action: "editing_price",
+        serviceId: serviceId
+    };
+    
+    const kb = new InlineKeyboard().text("❌ Отмена", `edit_srv_${serviceId}`);
+    await ctx.editMessageText("💰 <b>Введите новую цену</b> (например: <i>180.000 сум</i>):", { parse_mode: "HTML", reply_markup: kb });
+});
+
+// ИЗМЕНИТЬ НАЗВАНИЕ
+bot.callbackQuery(/^edit_name_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const serviceId = ctx.callbackQuery.data.replace("edit_name_", "");
+    
+    adminSessions[ctx.from.id] = {
+        action: "editing_name_ru",
+        serviceId: serviceId
+    };
+    
+    const kb = new InlineKeyboard().text("❌ Отмена", `edit_srv_${serviceId}`);
+    await ctx.editMessageText("📝 <b>Введите новое НАЗВАНИЕ услуги на РУССКОМ языке:</b>", { parse_mode: "HTML", reply_markup: kb });
+});
+
+// ИЗМЕНИТЬ ОПИСАНИЕ
+bot.callbackQuery(/^edit_desc_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const serviceId = ctx.callbackQuery.data.replace("edit_desc_", "");
+    
+    adminSessions[ctx.from.id] = {
+        action: "editing_desc_ru",
+        serviceId: serviceId
+    };
+    
+    const kb = new InlineKeyboard().text("❌ Отмена", `edit_srv_${serviceId}`);
+    await ctx.editMessageText("📝 <b>Введите новое ОПИСАНИЕ услуги на РУССКОМ языке:</b>", { parse_mode: "HTML", reply_markup: kb });
+});
+
+// ИЗМЕНИТЬ ФОТО
+bot.callbackQuery(/^edit_photo_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const serviceId = ctx.callbackQuery.data.replace("edit_photo_", "");
+    
+    adminSessions[ctx.from.id] = {
+        action: "editing_photo",
+        serviceId: serviceId
+    };
+    
+    try {
+        const service = await Service.findById(serviceId);
+        const kb = new InlineKeyboard().text("❌ Отмена", `edit_srv_${serviceId}`);
+
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch (e) {}
+
+        if (service && service.image) {
+            await ctx.replyWithPhoto(service.image, {
+                caption: "🖼 <b>Текущее фото услуги.</b>\n\nОтправьте <b>НОВУЮ фотографию</b>, чтобы заменить её, или нажмите «Отмена»:",
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        } else {
+            await ctx.reply("🖼 <b>У этой услуги пока нет фото.</b>\n\nОтправьте фотографию для услуги:", {
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        }
+    } catch (e) {
+        console.error("Ошибка при получении фото:", e);
+        await ctx.reply("❌ Произошла ошибка. Попробуйте еще раз.");
+    }
+});
+
+bot.callbackQuery("view_instagram", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    
+    const settings = await Settings.findOne() || await Settings.create({});
+    
+    const btnText = lang === "ru" ? "🌐 Перейти в соцсети" : "🌐 Ijtimoiy tarmoqlarga o'tish";
+    const kb = new InlineKeyboard()
+        .url(btnText, settings.instagram)
+        .row()
+        .text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+        
+    const text = lang === "ru" ? "🌐 **Наши соцсети**" : "🌐 **Bizning ijtimoiy tarmoqlar**";
+    
+    // Удаляем старое сообщение с фото
+    try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+
+    // Отправляем только текст с кнопкой
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
+});
+
+
+
+
+
+
+
+
+// ==========================================
+// КЛИЕНТСКАЯ ЧАСТЬ: СПИСОК И ПРОСМОТР УСЛУГ
+// ==========================================
+
+// 1. ПОКАЗ КАТАЛОГА УСЛУГ
+bot.callbackQuery("client_services", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    try {
+        // Определяем язык пользователя из сессии (по умолчанию 'ru')
+        const userLang = ctx.session?.lang || "ru"; 
+        
+        // Достаем из базы только активные услуги
+        const services = await Service.find({ isActive: true });
+
+        // Если услуг пока нет в базе
+        if (services.length === 0) {
+            const emptyText = userLang === "uz" 
+                ? "❌ Hozircha xizmatlar mavjud emas." 
+                : "❌ На данный момент доступных услуг нет.";
+                
+            return ctx.editMessageText(emptyText, {
+                reply_markup: new InlineKeyboard().text(
+                    userLang === "uz" ? "🔙 Orqaga" : "🔙 Назад", 
+                    "back_to_start"
+                )
+            });
+        }
+
+        const kb = new InlineKeyboard();
+        
+        // Подтягиваем название на языке клиента (ru или uz)
+        services.forEach(srv => {
+            const srvName = srv.name[userLang] || srv.name.ru;
+            kb.text(`💅 ${srvName}`, `view_srv_${srv._id}`).row();
+        });
+
+        kb.text(userLang === "uz" ? "🔙 Bosh menyu" : "🔙 Главное меню", "back_to_start");
+
+        const titleText = userLang === "uz"
+            ? "💅 <b>Bizning xizmatlarimiz:</b>\n\nTafsilotlarni ko'rish va yozilish uchun xizmatni tanlang:"
+            : "💅 <b>Наши услуги:</b>\n\nВыберите услугу, чтобы узнать подробности и записаться:";
+
+        // Умный переход: если вышли из карточки с фото — удаляем и шлем текст
+        if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
+            try { await ctx.deleteMessage(); } catch (e) {}
+            await ctx.reply(titleText, { parse_mode: "HTML", reply_markup: kb });
+        } else {
+            await ctx.editMessageText(titleText, { parse_mode: "HTML", reply_markup: kb });
+        }
+
+    } catch (e) {
+        console.error("Ошибка при выводе услуг клиенту:", e);
+    }
+});
+
+
+// 2. КАРТОЧКА КОНКРЕТНОЙ УСЛУГИ (С ФОТО)
+// ==========================================
+// КАРТОЧКА КОНКРЕТНОЙ УСЛУГИ (С ПЛАВНОЙ АНИМАЦИЕЙ)
+// ==========================================
+bot.callbackQuery(/^view_srv_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const serviceId = ctx.callbackQuery.data.replace("view_srv_", "");
+    const lang = clientSessions[ctx.from.id]?.lang || "ru"; // Используем твою логику сессий
+
+    try {
+        const service = await Service.findById(serviceId);
+        
+        if (!service) {
+            const notFound = lang === "uz" ? "❌ Xizmat topilmadi." : "❌ Услуга не найдена.";
+            return ctx.answerCallbackQuery({ text: notFound, show_alert: true }).catch(() => {});
+        }
+
+        const name = service.name[lang] || service.name.ru;
+        const description = service.description[lang] || service.description.ru;
+
+        const captionText = lang === "uz"
+            ? `💅 <b>${name}</b>\n\n📝 <b>Tavsif:</b>\n${description}\n\n💰 <b>Narxi:</b> ${service.price}`
+            : `💅 <b>${name}</b>\n\n📝 <b>Описание:</b>\n${description}\n\n💰 <b>Цена:</b> ${service.price}`;
+
+        const kb = new InlineKeyboard()
+            .text(lang === "uz" ? "📅 Yozilish" : "📅 Записаться", `book_srv_${serviceId}`).row()
+            // ИСПРАВЛЕНИЕ: Теперь кнопка ведет в правильное меню
+            .text(lang === "uz" ? "🔙 Xizmatlarga qaytish" : "🔙 Назад к услугам", "view_all_services");
+
+        // ИСПРАВЛЕНИЕ: Плавная замена картинки (imgWelcome) на фото услуги (service.image)
+        if (service.image) {
+            await ctx.editMessageMedia(
+                { type: "photo", media: service.image, caption: captionText, parse_mode: "HTML" },
+                { reply_markup: kb }
+            ).catch(e => console.log("Ошибка плавной замены фото:", e.message));
+        } else {
+            await ctx.editMessageCaption({ caption: captionText, parse_mode: "HTML", reply_markup: kb })
+                     .catch(e => console.log("Ошибка плавной замены текста:", e.message));
+        }
+
+    } catch (e) {
+        console.error("Ошибка при просмотре услуги клиентом:", e);
+    }
+});
+
+
+
+
+bot.callbackQuery("view_address", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    const kb = new InlineKeyboard().text(LANG[lang].back, "back_to_start");
+    
+    // Достаем адрес из базы
+    const settings = await Settings.findOne() || await Settings.create({});
+    
+    const textRu = `📍 **Наш адрес**\n\n${settings.address}`;
+    const textUz = `📍 **Bizning manzil**\n\n${settings.address}`;
+    
+    const text = lang === "ru" ? textRu : textUz;
+    await smartUpdate(ctx, imgWelcome, text, kb);
+});
+
+bot.callbackQuery(/^view_service_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const serviceId = ctx.callbackQuery.data.replace("view_service_", "");
+    
+    if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = { lang: 'ru' };
+    clientSessions[ctx.from.id].serviceKey = serviceId;
+    const lang = clientSessions[ctx.from.id].lang;
+
+    try {
+        const service = await Service.findById(serviceId);
+        
+        // Защита: проверяем, нашлась ли услуга и есть ли у нее поле name
+        if (!service || !service.name) {
+            const notFound = lang === "ru" ? "❌ Услуга не найдена" : "❌ Xizmat topilmadi";
+            return ctx.answerCallbackQuery({ text: notFound, show_alert: true }).catch(() => {});
+        }
+
+        // Безопасный доступ к свойствам через ?.
+        const name = service.name?.[lang] || service.name?.ru || "Без названия";
+        const description = service.description?.[lang] || service.description?.ru || "";
+        const price = service.price || "0";
+        const priceText = lang === "ru" ? "💰 <b>Цена:</b>" : "💰 <b>Narxi:</b>";
+
+        const captionText = `💅 <b>${name}</b>\n\n📝 ${description}\n\n${priceText} ${price}`;
+
+        const kb = new InlineKeyboard()
+            .text(LANG[lang]?.book_time || "📅 Записаться", `open_calendar_${serviceId}`).row()
+            .text(LANG[lang]?.back_services || "🔙 Назад", "view_all_services");
+
+        try { await ctx.deleteMessage(); } catch (e) {}
+
+        if (service.image) {
+            await ctx.replyWithPhoto(service.image, {
+                caption: captionText,
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        } else {
+            await ctx.reply(captionText, {
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        }
+
+    } catch (e) {
+        console.error("Ошибка при просмотре услуги:", e);
+    }
+});
+// ==========================================
+// ОТКРЫТИЕ КАЛЕНДАРЯ ДЛЯ ВЫБОРА ДАТЫ
+// ==========================================
+bot.callbackQuery(/^open_calendar_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    // Получаем ID услуги из базы MongoDB
+    const serviceId = ctx.callbackQuery.data.replace("open_calendar_", "");
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+
+    // Сохраняем ID выбранной услуги в сессию клиента
+    if (!clientSessions[ctx.from.id]) {
+        clientSessions[ctx.from.id] = { lang: lang };
+    }
+    clientSessions[ctx.from.id].serviceKey = serviceId;
+
+    // Определяем текущий месяц и год для календаря
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+
+    // Вызываем твою готовую функцию генерации календаря
+    const kb = createCalendarKeyboard(year, month, serviceId, lang);
+
+    const text = lang === "ru" 
+        ? "📅 <b>Выберите удобную дату:</b>" 
+        : "📅 <b>Qulay sanani tanlang:</b>";
+
+    // Убираем карточку с фото и показываем календарь
+    try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch (e) {}
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+bot.callbackQuery(/^m_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.replace("m_", "").split("_");
+    let year = parseInt(parts[0]), month = parseInt(parts[1]);
+    if (month > 11) { month = 0; year++; }
+    if (month < 0) { month = 11; year--; }
+    const session = clientSessions[ctx.from.id];
+    if (!session) return;
+    const lang = session.lang || "ru";
+    const kb = createCalendarKeyboard(year, month, session.serviceKey, lang);
+    await ctx.editMessageReplyMarkup({ reply_markup: kb });
+});
+
+
+
+// ==========================================
+// 19. КЛИЕНТСКАЯ ЧАСТЬ: СПИСОК И ПРОСМОТР УСЛУГ
+// ==========================================
+
+bot.callbackQuery(["client_services", "view_all_services"], async (ctx) => {
+    // ВЫВОДИМ В ТЕРМИНАЛ ЛОГ ПРИ НАЖАТИИ
+    console.log("👉 Кликнули на каталог услуг или кнопку назад!");
+
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+    const userLang = clientSessions[userId].lang;
+    
+    try {
+        const services = await Service.find({ isActive: true });
+
+        if (services.length === 0) {
+            const emptyText = userLang === "uz" 
+                ? "❌ Hozircha xizmatlar mavjud emas." 
+                : "❌ На данный момент доступных услуг нет.";
+                
+            const kb = new InlineKeyboard().text(
+                userLang === "uz" ? "🔙 Asosiy menyuga" : "🔙 В главное меню", 
+                "back_to_start"
+            );
+
+            if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
+                try { await ctx.deleteMessage(); } catch (e) {}
+                return await ctx.reply(emptyText, { parse_mode: "HTML", reply_markup: kb });
+            } else {
+                return await ctx.editMessageText(emptyText, { parse_mode: "HTML", reply_markup: kb });
+            }
+        }
+
+        const kb = new InlineKeyboard();
+        services.forEach(srv => {
+            if (!srv) return;
+            const srvName = srv.name?.[userLang] || srv.name?.ru || "Услуга";
+            kb.text(`💅 ${srvName}`, `view_service_${srv._id}`).row();
+        });
+
+        kb.text(userLang === "uz" ? "🔙 Bosh menyu" : "🔙 Главное меню", "back_to_start");
+
+        const titleText = userLang === "uz"
+            ? "💅 <b>Bizning xizmatlarimiz:</b>\n\nTafsilotlarni ko'rish va yozilish uchun xizmatni tanlang:"
+            : "💅 <b>Наши услуги:</b>\n\nВыберите услугу, чтобы узнать подробности и записаться:";
+
+        if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
+            try { await ctx.deleteMessage(); } catch (e) {}
+            await ctx.reply(titleText, { parse_mode: "HTML", reply_markup: kb });
+        } else {
+            await ctx.editMessageText(titleText, { parse_mode: "HTML", reply_markup: kb });
+        }
+
+    } catch (e) {
+        console.error("Ошибка при выводе услуг клиенту:", e);
+    }
+});
+
+// --- УНИВЕРСАЛЬНАЯ ЗАГЛУШКА ДЛЯ ВОЗВРАТА В МЕНЮ ---
+
+// 1. Если это вдруг оказалась текстовая кнопка
+bot.hears(["🔙 В главное меню", "🔙 Bosh menyu"], async (ctx) => {
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    try { await ctx.deleteMessage(); } catch(e) {}
+    await ctx.replyWithPhoto(imgWelcome, { 
+        caption: LANG[lang]?.welcome.replace("{name}", ctx.from.first_name) || "Добро пожаловать!", 
+        parse_mode: "Markdown", 
+        reply_markup: getMainMenuKeyboard(lang) 
+    });
+});
+
+// 2. Если это Inline-кнопка (перехватываем ВСЕ возможные названия)
+bot.callbackQuery(["main_menu", "back_to_start", "back"], async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    try { await ctx.deleteMessage(); } catch(e) {}
+    await ctx.replyWithPhoto(imgWelcome, { 
+        caption: LANG[lang]?.welcome.replace("{name}", ctx.from.first_name) || "Добро пожаловать!", 
+        parse_mode: "Markdown", 
+        reply_markup: getMainMenuKeyboard(lang) 
+    });
+});
+// КАРТОЧКА КОНКРЕТНОЙ УСЛУГИ (С ФОТО)
+bot.callbackQuery(/^view_service_|^view_srv_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const serviceId = ctx.callbackQuery.data.replace(/view_service_|view_srv_/, "");
+    
+    const userId = ctx.from.id;
+    if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+    clientSessions[userId].serviceKey = serviceId;
+    const lang = clientSessions[userId].lang;
+
+    try {
+        const service = await Service.findById(serviceId);
+        
+        if (!service || !service.name) {
+            const notFound = lang === "uz" ? "❌ Xizmat topilmadi." : "❌ Услуга не найдена.";
+            return ctx.answerCallbackQuery({ text: notFound, show_alert: true }).catch(() => {});
+        }
+
+        const name = service.name?.[lang] || service.name?.ru || "Без названия";
+        const description = service.description?.[lang] || service.description?.ru || "";
+        const price = service.price || "0";
+        const priceText = lang === "ru" ? "💰 <b>Цена:</b>" : "💰 <b>Narxi:</b>";
+
+        const captionText = `💅 <b>${name}</b>\n\n📝 <b>${lang === "ru" ? "Описание" : "Tavsif"}:</b>\n${description}\n\n${priceText} ${price}`;
+
+        const kb = new InlineKeyboard()
+            .text(LANG[lang]?.book_time || (lang === "ru" ? "📅 Записаться" : "📅 Yozilish"), `open_calendar_${serviceId}`).row()
+            .text(LANG[lang]?.back_services || (lang === "ru" ? "🔙 Назад" : "🔙 Orqaga"), "view_all_services");
+
+        // Удаляем предыдущее меню (текст или фото), чтобы отправить красивую карточку
+        try { await ctx.deleteMessage(); } catch (e) {}
+
+        if (service.image) {
+            await ctx.replyWithPhoto(service.image, {
+                caption: captionText,
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        } else {
+            await ctx.reply(captionText, {
+                parse_mode: "HTML",
+                reply_markup: kb
+            });
+        }
+
+    } catch (e) {
+        console.error("Ошибка при просмотре услуги:", e);
+    }
+});
+
+// ПРОСМОТР АДРЕСА
+bot.callbackQuery("view_address", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    const kb = new InlineKeyboard().text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+    
+    const settings = await Settings.findOne() || await Settings.create({});
+    
+    const textRu = `📍 **Наш адрес**\n\n${settings.address}`;
+    const textUz = `📍 **Bizning manzil**\n\n${settings.address}`;
+    
+    const text = lang === "ru" ? textRu : textUz;
+    await smartUpdate(ctx, imgWelcome, text, kb);
+});
+
+// ==========================================
+// 20. ОТКРЫТИЕ КАЛЕНДАРЯ ДЛЯ ВЫБОРА ДАТЫ
+// ==========================================
+bot.callbackQuery(/^open_calendar_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    const serviceId = ctx.callbackQuery.data.replace("open_calendar_", "");
+    const userId = ctx.from.id;
+    
+    if (!clientSessions[userId]) {
+        clientSessions[userId] = { lang: 'ru' };
+    }
+    const lang = clientSessions[userId].lang;
+    clientSessions[userId].serviceKey = serviceId; // Сохраняем выбранную услугу
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+
+    const kb = createCalendarKeyboard(year, month, serviceId, lang);
+
+    const text = lang === "ru" 
+        ? "📅 <b>Выберите удобную дату:</b>" 
+        : "📅 <b>Qulay sanani tanlang:</b>";
+
+    try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch (e) {}
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+// НАВИГАЦИЯ ПО КАЛЕНДАРЮ (МЕСЯЦЫ)
+bot.callbackQuery(/^m_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const parts = ctx.callbackQuery.data.replace("m_", "").split("_");
+    let year = parseInt(parts[0]), month = parseInt(parts[1]);
+    
+    // Переход между годами (декабрь -> январь и наоборот)
+    if (month > 11) { month = 0; year++; }
+    if (month < 0) { month = 11; year--; }
+    
+    const session = clientSessions[ctx.from.id];
+    if (!session) return;
+    const lang = session.lang || "ru";
+    
+    const kb = createCalendarKeyboard(year, month, session.serviceKey, lang);
+    await ctx.editMessageReplyMarkup({ reply_markup: kb }).catch(() => {});
+});
+
+
+
+
+
+// ==========================================
+// 21. ВЫБОР ВРЕМЕНИ (ГЕНЕРАЦИЯ СЛОТОВ)
+// ==========================================
+bot.callbackQuery(/^date_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const parts = ctx.callbackQuery.data.replace("date_", "").split("_");
+    
+    let session = clientSessions[ctx.from.id];
+    
+    if (!session) {
+        const text = "⏳ Время сессии истекло из-за обновления бота. Пожалуйста, начните заново: /start";
+        return ctx.reply(text).catch(() => {});
+    }
+
+    const lang = session.lang || "ru";
+
+    const mString = String(parseInt(parts[1]) + 1).padStart(2, '0');
+    const dString = String(parts[2]).padStart(2, '0');
+    
+    session.date = `${parts[0]}-${mString}-${dString}`;
+    session.dateText = `${dString}.${mString}.${parts[0]}`;
+
+    try {
+        const activeBookings = await Booking.find({ 
+            date: session.date, 
+            status: { $in: ["pending", "confirmed"] } 
+        });
+        const bookedTimes = activeBookings.map(b => b.time);
+
+        const kb = new InlineKeyboard();
+        TIME_SLOTS.forEach((time, index) => {
+            const isBooked = bookedTimes.includes(time);
+            if (isBooked) {
+                kb.text(`❌ ${time}`, `slot_already_booked`);
+            } else {
+                kb.text(time, `book_time_${time}`);
+            }
+            if ((index + 1) % 2 === 0) kb.row();
+        });
+        kb.row().text(LANG[lang].back, `open_calendar_${session.serviceKey}`);
+
+        const service = await Service.findById(session.serviceKey);
+        const serviceName = service ? (service.name[lang] || service.name.ru) : (lang === "ru" ? "Услуга" : "Xizmat");
+
+        const dateLabel = lang === "ru" ? "📅 Дата:" : "📅 Sana:";
+        const serviceLabel = lang === "ru" ? "💅 Услуга:" : "💅 Xizmat:";
+        const chooseLabel = lang === "ru" ? "Выберите свободное время:" : "Bo'sh vaqtni tanlang:";
+        
+        const text = `${dateLabel} <b>${session.dateText}</b>\n${serviceLabel} <b>${serviceName}</b>\n\n${chooseLabel}`;
+        
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch (e) {}
+        await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+
+    } catch (err) {
+        console.error("Ошибка при генерации слотов времени:", err);
+    }
+});
+
+bot.callbackQuery("slot_already_booked", async (ctx) => {
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    await ctx.answerCallbackQuery({ text: lang === "ru" ? "⚠️ Это время уже занято!" : "⚠️ Bu vaqt allaqochon band qilingan!", show_alert: true });
+});
+
+// ==========================================
+// 22. БРОНИРОВАНИЕ ВРЕМЕНИ И ЗАПРОС ИМЕНИ
+// ==========================================
+bot.callbackQuery(/^book_time_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    
+    const time = ctx.callbackQuery.data.replace("book_time_", "");
+    const session = clientSessions[ctx.from.id];
+    
+    if (!session || !session.date) {
+        return ctx.answerCallbackQuery({ 
+            text: "⏳ Сессия устарела! Пожалуйста, пройдите запись заново через главное меню.", 
+            show_alert: true 
+        }).catch(() => {});
+    }
+    
+    const lang = session.lang || "ru";
+
+    try {
+        const isBooked = await Booking.exists({ 
+            date: session.date, 
+            time: time, 
+            status: { $in: ["pending", "confirmed"] } 
+        });
+
+        if (isBooked) {
+            const errText = lang === "ru" ? "❌ Это время успели занять! Выберите другое." : "❌ Bu vaqtni olib qo'yishdi! Boshqasini tanlang.";
+            return ctx.answerCallbackQuery({ text: errText, show_alert: true }).catch(() => {});
+        }
+        
+        session.time = time;
+        session.awaitingName = true;
+        
+        const askNameText = lang === "ru" 
+            ? "✍️ <b>На какое имя вас записать?</b>\n\nОтправьте ваше имя ответным сообщением:" 
+            : "✍️ <b>Sizni qaysi ismga yozib qo'yaylik?</b>\n\nIsmingizni xabar qilib yuboring:";
+        
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+        await ctx.reply(askNameText, { parse_mode: "HTML" });
+
+    } catch (err) {
+        console.error("Ошибка при бронировании времени:", err);
+    }
+});
+
+// ==========================================
+// 23. ПРИНЯТИЕ / ОТКЛОНЕНИЕ ЗАЯВКИ МАСТЕРОМ
+// ==========================================
+bot.callbackQuery(/^admin_conf_/, async (ctx) => {
+    const bId = ctx.callbackQuery.data.replace("admin_conf_", "");
+    
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking || booking.status === "cancelled") return ctx.answerCallbackQuery({ text: "Запись не найдена или уже отменена!", show_alert: true });
+       
+        booking.status = "confirmed";
+        await booking.save(); 
+
+        const targetUserId = booking.userId;
+       
+        if (booking.pendingMessageId) {
+            try { await bot.api.deleteMessage(targetUserId, booking.pendingMessageId); } catch(e){}
+        }
+        
+        await ctx.editMessageText(`✅ **ВЫ ПОДТВЕРДИЛИ ЗАПИСЬ**\n\nКлиент: ${booking.clientName}\nДата: ${booking.dateText} в ${booking.time}`, { parse_mode: "Markdown" });
+        await ctx.answerCallbackQuery({ text: "Подтверждено!", show_alert: false });
+       
+        setTimeout(async () => { 
+            try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} 
+        }, 30000);
+       
+        try {
+            const userLang = clientSessions[targetUserId]?.lang || "ru";
+            
+            // Подтягиваем название услуги из базы
+            let serviceNameRu = "Услуга";
+            let serviceNameUz = "Xizmat";
+            try {
+                const service = await Service.findOne({ key: booking.serviceKey });
+                if (service) {
+                    serviceNameRu = service.name.ru;
+                    serviceNameUz = service.name.uz || service.name.ru;
+                }
+            } catch (e) { console.error("Ошибка при поиске услуги для подтверждения:", e); }
+
+            const notifyMsg = userLang === "ru"
+                ? `🎉 **Отличные новости!**\nМастер подтвердил вашу запись!\n\nИмя: ${booking.clientName}\n💅 Услуга: **${serviceNameRu}**\n📅 Дата: **${booking.dateText}**\n🕐 Время: **${booking.time}**\n\nЖдем вас! ✨`
+                : `🎉 **Ajoyib yangilik!**\nUsta yozuvingizni tasdiqladi!\n\nIsm: ${booking.clientName}\n💅 Xizmat: **${serviceNameUz}**\n📅 Sana: **${booking.dateText}**\n🕐 Vaqt: **${booking.time}**\n\nSizni kutamiz! ✨`;
+            
+            await bot.api.sendMessage(targetUserId, notifyMsg, { parse_mode: "Markdown" });
+        } catch (e) {}
+    } catch (err) { console.error(err); }
+});
+
+bot.callbackQuery(/^admin_rej_/, async (ctx) => {
+    const bId = ctx.callbackQuery.data.replace("admin_rej_", "");
+    
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking || booking.status === "cancelled") return ctx.answerCallbackQuery({ text: "Запись не существует!", show_alert: true });
+       
+        const kb = new InlineKeyboard();
+        MASTER_CANCEL_REASONS.forEach((reason, index) => { kb.text(reason, `master_reason_${bId}_${index}`).row(); });
+        kb.text("⬅️ Назад в меню", "back_to_admin");
+        
+        await ctx.editMessageText(`Укажите причину отмены для клиента **${booking.clientName}**:`, { reply_markup: kb, parse_mode: "Markdown" });
+    } catch (err) { console.error(err); }
+});
+
+bot.callbackQuery(/^master_reason_/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const parts = ctx.callbackQuery.data.split("_");
+    const bId = parts[2], reasonIndex = parts[3];
+    
+    try {
+        const booking = await Booking.findById(bId);
+        if (!booking || booking.status === "cancelled") return ctx.answerCallbackQuery({ text: "Запись уже удалена!", show_alert: true });
+        
+        const reason = MASTER_CANCEL_REASONS[reasonIndex];
+        const userIdToNotify = booking.userId;
+        const userLang = clientSessions[userIdToNotify]?.lang || "ru";
+        
+        if (booking.pendingMessageId) {
+            try { await bot.api.deleteMessage(userIdToNotify, booking.pendingMessageId); } catch(e){}
+        }
+        
+        booking.status = "cancelled";
+        booking.reason = reason;
+        booking.cancelledBy = "master";
+        await booking.save();
+        
+        await ctx.editMessageText(`❌ **Запись отменена**\n\nПричина отправлена клиенту: ${reason}`, { parse_mode: "Markdown" });
+        setTimeout(async () => { try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} }, 10000);
+        
+        try {
+            const notifyMsg = userLang === "ru"
+                ? `❌ **К сожалению, мастер отменил вашу запись.**\n\n💬 **Причина:** ${reason}\n\nПожалуйста, выберите другое время.`
+                : `❌ **Afsuski, usta yozuvingizni bekor qildi.**\n\n💬 **Sabab:** ${reason}\n\nIltimos, boshqa vaqtni tanlang.`;
+            
+            const kb = new InlineKeyboard()
+                .text(userLang === "ru" ? "📅 Выбрать другое время" : "📅 Boshqa vaqtni tanlash", `open_calendar_${booking.serviceKey}`);
+
+            const sentMsg = await bot.api.sendMessage(userIdToNotify, notifyMsg, { parse_mode: "Markdown", reply_markup: kb });
+            
+            if (!clientSessions[userIdToNotify]) clientSessions[userIdToNotify] = { lang: userLang };
+            clientSessions[userIdToNotify].cancellationMessageId = sentMsg.message_id;
+
+        } catch (e) {
+            console.error("Ошибка при отправке уведомления клиенту:", e);
+        }
+    } catch (err) { console.error(err); }
+});
+// ==========================================
+// 24. МОИ ЗАПИСИ (КЛИЕНТ) - БЕЗ ФОТО
+// ==========================================
+bot.callbackQuery("view_my_bookings", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+
+    try {
+        const userBookings = await Booking.find({ 
+            userId: ctx.from.id, 
+            status: { $in: ["pending", "confirmed"] } 
+        });
+
+        // УДАЛЯЕМ ФОТОГРАФИЮ ИЗ ЧАТА
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+
+        if (userBookings.length === 0) {
+            const kb = new InlineKeyboard().text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+            return await ctx.reply(LANG[lang]?.no_bookings || "У вас пока нет записей.", { reply_markup: kb });
+        }
+       
+        const services = await Service.find();
+        const serviceMap = {};
+        services.forEach(s => {
+            serviceMap[s._id.toString()] = s;
+            if (s.key) serviceMap[s.key] = s;
+        });
+
+        let text = lang === "ru" ? "📅 **Ваши текущие записи:**\n\n" : "📅 **Sizning joriy yozuvlaringiz:**\n\n";
+        const kb = new InlineKeyboard();
+        
+        userBookings.forEach((b, index) => {
+            const statusTxt = lang === "ru" 
+                ? (b.status === "pending" ? "⏳ На рассмотрении" : "✅ Подтверждена") 
+                : (b.status === "pending" ? "⏳ Ko'rib chiqilmoqda" : "✅ Tasdiqlangan");
+            
+            const service = serviceMap[b.serviceKey];
+            const serviceName = service ? (service.name[lang] || service.name.ru) : (lang === "ru" ? "Услуга удалена" : "Xizmat o'chirilgan");
+
+            text += `${index + 1}. **${serviceName}** (${b.clientName}) | ${b.dateText} | ${b.time}\n(${statusTxt})\n\n`;
+            kb.text(`${LANG[lang]?.cancel_btn || "❌ Отменить"} №${index + 1}`, `user_cancel_${b._id}`).row();
+        });
+        
+        kb.text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+        
+        // ОТПРАВЛЯЕМ ПРОСТО ТЕКСТ
+        await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch (err) { 
+        console.error("Ошибка при просмотре записей:", err); 
+    }
+});
+
+bot.callbackQuery(/^user_cancel_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const bId = ctx.callbackQuery.data.replace("user_cancel_", "");
+    
+    try {
+        const bookingExists = await Booking.exists({ _id: bId, status: { $in: ["pending", "confirmed"] } });
+        if (!bookingExists) return ctx.answerCallbackQuery({ text: "Запись не найдена!", show_alert: true });
+       
+        const lang = clientSessions[ctx.from.id]?.lang || "ru";
+        const kb = new InlineKeyboard();
+        CANCEL_REASONS.forEach((reason, index) => { kb.text(reason, `user_reason_${bId}_${index}`).row(); });
+        kb.text(lang === "ru" ? "⬅️ Назад" : "⬅️ Orqaga", "view_my_bookings");
+        
+        const text = lang === "ru" ? "Выберите причину отмены записи:" : "Yozuvni bekor qilish sababini tanlang:";
+        
+        // УДАЛЯЕМ ФОТОГРАФИЮ И ОТПРАВЛЯЕМ ТЕКСТ
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+        await ctx.reply(text, { reply_markup: kb });
+    } catch (err) { 
+        console.error("Ошибка при подготовке отмены записи:", err); 
+    }
+});
+
+bot.callbackQuery(/^user_reason_/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const parts = ctx.callbackQuery.data.split("_");
+    const bId = parts[2], reasonIndex = parts[3];
+    const lang = clientSessions[ctx.from.id]?.lang || "ru";
+    
+    try {
+        const booking = await Booking.findById(bId);
+        
+        // УДАЛЯЕМ ФОТОГРАФИЮ (если она была)
+        try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch(e){}
+
+        if (!booking || booking.status === "cancelled") {
+            const kb = new InlineKeyboard().text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+            return await ctx.reply("Запись не найдена.", { reply_markup: kb });
+        }
+        
+        const reason = CANCEL_REASONS[reasonIndex];
+        
+        let serviceNameRu = "Услуга";
+        try {
+            const service = await Service.findById(booking.serviceKey) || await Service.findOne({ key: booking.serviceKey });
+            if (service) serviceNameRu = service.name.ru;
+        } catch (e) {}
+
+        try {
+            const masterMsg = await bot.api.sendMessage(
+                MASTER_CHAT_ID, 
+                `⚠️ **ОТМЕНА ЗАПИСИ (Клиент)**\n\n👤 Имя: ${booking.clientName}\n💅 Услуга: ${serviceNameRu}\n📅 Дата: ${booking.dateText} в ${booking.time}\n❌ Причина: ${reason}`, 
+                { parse_mode: "Markdown" }
+            );
+            
+            setTimeout(async () => {
+                try { await bot.api.deleteMessage(MASTER_CHAT_ID, masterMsg.message_id); } catch (e) {} 
+            }, 30000);
+        } catch (e) {}
+
+        if (booking.adminMessageId) {
+            try { await bot.api.deleteMessage(MASTER_CHAT_ID, booking.adminMessageId); } catch(e) {}
+        }
+
+        booking.status = "cancelled";
+        booking.reason = reason;
+        booking.cancelledBy = "client";
+        await booking.save();
+
+        const kb = new InlineKeyboard().text(LANG[lang]?.back || "🔙 Назад", "back_to_start");
+        const successText = lang === "ru" 
+            ? `✅ Ваша запись успешно отменена.\nБудем рады видеть вас в другой раз! ✨` 
+            : `✅ Sizning yozuvingiz bekor qilindi.\nSizni boshqa safar kutamiz! ✨`;
+            
+        // ОТПРАВЛЯЕМ ТЕКСТ
+        await ctx.reply(successText, { reply_markup: kb });
+    } catch (err) { 
+        console.error("Ошибка при отмене записи клиентом:", err); 
+    }
+});
+bot.callbackQuery("back_to_start", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const userId = ctx.from.id;
+    
+    // Сбрасываем флаг ожидания имени
+    if (!clientSessions[userId]) clientSessions[userId] = {};
+    clientSessions[userId].awaitingName = false;
+    
+    const lang = clientSessions[userId].lang || "ru";
+    
+    // 1. Получаем свежие настройки из базы
+    const settings = await Settings.findOne() || {};
+
+    // 2. Берем фото из базы (или стандартное)
+    const photoToSend = settings.mainMenuPhoto || (typeof imgWelcome !== 'undefined' ? imgWelcome : null);
+
+    // 3. Берем нужный текст из базы с учетом языка
+    let templateText;
+    if (lang === "uz") {
+        templateText = settings.welcomeTextUz || (LANG.uz?.welcome || "Salom, {name}! 👋");
+    } else {
+        templateText = settings.welcomeTextRu || (LANG.ru?.welcome || "Привет, {name}! 👋");
+    }
+    const welcomeText = templateText.replace("{name}", ctx.from.first_name || "Гость");
+
+    // 4. Отрисовка меню (с сохранением твоей логики плавного обновления)
+    if (ctx.callbackQuery.message && !ctx.callbackQuery.message.photo) {
+        // Если возвращаемся из текстового раздела — удаляем текст и присылаем новое фото
+        try { await ctx.deleteMessage(); } catch(e) {}
+        
+        let res;
+        if (photoToSend) {
+            res = await ctx.replyWithPhoto(photoToSend, { 
+                caption: welcomeText, 
+                parse_mode: "HTML", // <-- Заменили Markdown на HTML, так как в админке используем <b> и <i>
+                reply_markup: getMainMenuKeyboard(lang) 
+            });
+        } else {
+            res = await ctx.reply(welcomeText, {
+                parse_mode: "HTML",
+                reply_markup: getMainMenuKeyboard(lang) 
+            });
+        }
+        clientSessions[userId].menuMessageId = res.message_id;
+        clientSessions[userId].currentImage = photoToSend;
+        
+    } else {
+        // Если фотография уже висит — плавно обновляем ее через твой smartUpdate
+        await smartUpdate(ctx, photoToSend, welcomeText, getMainMenuKeyboard(lang));
+        clientSessions[userId].currentImage = photoToSend;
+    }
+});
+
+bot.callbackQuery("ignore", async (ctx) => { 
+    await ctx.answerCallbackQuery().catch(() => {}); 
+});
+
+bot.catch((err) => {
+    console.error("🛑 ГЛОБАЛЬНАЯ ОШИБКА БОТА:");
+    console.error(err); 
+});
+
+// ЗАПУСК
+bot.start();
+console.log("🚀 БОТ УСПЕШНО ОБНОВЛЕН И ЗАПУЩЕН! MongoDB полностью интегрирована.");

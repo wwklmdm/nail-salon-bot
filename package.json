@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@grammyjs/storage-mongodb": "^2.6.0",
+    "grammy": "^1.44.0",
+    "mongoose": "^9.7.4",
+    "node-cron": "^4.6.0"
+  }
+}

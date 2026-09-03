@@ -1,0 +1,405 @@
+1c1,2
+< const { Bot, InlineKeyboard } = require("grammy");
+---
+> const { Bot, InlineKeyboard, session } = require("grammy");
+> const { MongoDBAdapter } = require("@grammyjs/storage-mongodb");
+36c37,39
+<     welcomeTextUz: { type: String, default: "Salom, {name}! 👋\nBizning studiyamizga xush kelibsiz.\nKerakli bo'limni tanlang:" }
+---
+>     welcomeTextUz: { type: String, default: "Salom, {name}! 👋\nBizning studiyamizga xush kelibsiz.\nKerakli bo'limni tanlang:" },
+>     portfolioPhotoId: { type: String, default: "" },
+>     socialLinks: { type: [{ name: String, url: String }], default: [] }
+103,104c106
+< const adminSessions = {};
+< const clientSessions = {}; // Заранее объявляем для клиентской части
+---
+> 
+123,124c125,126
+<         if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+<         clientSessions[ctx.from.id].adminMenuMessageId = res.message_id; 
+---
+>         
+>         ctx.session.client.adminMenuMessageId = res.message_id; 
+143,144c145,146
+<     const clientSession = clientSessions[userId];
+<     const adminSession = adminSessions[userId];
+---
+>     const clientSession = ctx.session.client;
+>     const adminSession = ctx.session.admin;
+200c202
+<                     const userLang = clientSessions[targetUserId]?.lang || "ru";
+---
+>                     const userLang = (await mongoose.connection.collection("sessions").findOne({ _id: String(targetUserId) }))?.value?.client?.lang || "ru";
+255c257,259
+<             const allUsers = new Set([...userIds, ...Object.keys(clientSessions).map(Number)]);
+---
+>             const allSessionDocs = await mongoose.connection.collection("sessions").find({}, { projection: { _id: 1 } }).toArray();
+>             const sessionIds = allSessionDocs.map(d => Number(d._id));
+>             const allUsers = new Set([...userIds, ...sessionIds]);
+364c368
+<                 delete adminSessions[userId];
+---
+>                 ctx.session.admin = {};
+380c384
+<                 delete adminSessions[userId];
+---
+>                 ctx.session.admin = {};
+396c400
+<                 delete adminSessions[userId];
+---
+>                 ctx.session.admin = {};
+440c444
+<                 delete adminSessions[userId];
+---
+>                 ctx.session.admin = {};
+452c456
+<                 delete adminSessions[userId];
+---
+>                 ctx.session.admin = {};
+467,468c471,472
+<     const adminSession = adminSessions[userId];
+<     const clientSession = clientSessions[userId];
+---
+>     const adminSession = ctx.session.admin;
+>     const clientSession = ctx.session.client;
+487c491
+<             if (adminSession) delete adminSessions[userId].action;
+---
+>             if (adminSession) delete ctx.session.admin.action;
+508c512
+<             delete adminSessions[userId];
+---
+>             ctx.session.admin = {};
+528c532
+<             delete adminSessions[userId]; 
+---
+>             ctx.session.admin = {}; 
+621c625
+<                     const userLang = clientSessions[targetUserId]?.lang || "ru";
+---
+>                     const userLang = (await mongoose.connection.collection("sessions").findOne({ _id: String(targetUserId) }))?.value?.client?.lang || "ru";
+656c660,661
+<     const session = clientSessions[MASTER_CHAT_ID];
+---
+>     const sessDoc = await mongoose.connection.collection("sessions").findOne({ _id: String(MASTER_CHAT_ID) });
+>     const session = sessDoc?.value?.client;
+727d731
+<     if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+728a733
+>     
+730c735
+<         if (clientSessions[userId].currentImage === newImageUrl) {
+---
+>         if (ctx.session.client.currentImage === newImageUrl) {
+737c742
+<             clientSessions[userId].currentImage = newImageUrl;
+---
+>             ctx.session.client.currentImage = newImageUrl;
+924,925d928
+<         if (!clientSessions[userId]) clientSessions[userId] = {};
+<         clientSessions[userId].awaitingName = false; 
+926a930,931
+>         ctx.session.client.awaitingName = false; 
+>         
+941,942c946,947
+<         if (clientSessions[userId].menuMessageId) {
+<             try { await bot.api.deleteMessage(userId, clientSessions[userId].menuMessageId); } catch(e) {}
+---
+>         if (ctx.session.client.menuMessageId) {
+>             try { await bot.api.deleteMessage(userId, ctx.session.client.menuMessageId); } catch(e) {}
+945c950
+<         clientSessions[userId].currentImage = photoToSend; 
+---
+>         ctx.session.client.currentImage = photoToSend; 
+955c960
+<         clientSessions[userId].menuMessageId = res.message_id;
+---
+>         ctx.session.client.menuMessageId = res.message_id;
+969d973
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+971d974
+<     clientSessions[userId].lang = "ru";
+972a976,977
+>     ctx.session.client.lang = "ru";
+>     
+981d985
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+983d986
+<     clientSessions[userId].lang = "uz";
+984a988,989
+>     ctx.session.client.lang = "uz";
+>     
+1014,1015c1019,1020
+<     if (!adminSessions[ctx.from.id]) adminSessions[ctx.from.id] = {};
+<     adminSessions[ctx.from.id].step = "awaiting_main_photo";
+---
+>     
+>     ctx.session.admin.step = "awaiting_main_photo";
+1022,1023c1027,1028
+<     if (!adminSessions[ctx.from.id]) adminSessions[ctx.from.id] = {};
+<     adminSessions[ctx.from.id].step = "awaiting_main_text_ru";
+---
+>     
+>     ctx.session.admin.step = "awaiting_main_text_ru";
+1029,1031c1034,1036
+<     if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+<     clientSessions[ctx.from.id].awaitingBroadcast = true;
+<     clientSessions[ctx.from.id].adminMenuMessageId = ctx.callbackQuery.message.message_id;
+---
+>     
+>     ctx.session.client.awaitingBroadcast = true;
+>     ctx.session.client.adminMenuMessageId = ctx.callbackQuery.message.message_id;
+1039,1040c1044,1045
+<     if (adminSessions[ctx.from.id]) {
+<         delete adminSessions[ctx.from.id];
+---
+>     if (ctx.session.admin) {
+>         ctx.session.admin = {};
+1152,1153d1156
+<     if (!adminSessions[userId]) adminSessions[userId] = {};
+<     adminSessions[userId].action = "editing_main_photo";
+1155,1156c1158
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+<     clientSessions[userId].awaitingSettingUpdate = "mainMenuPhoto";
+---
+>     ctx.session.admin.action = "editing_main_photo";
+1157a1160,1162
+>     
+>     ctx.session.client.awaitingSettingUpdate = "mainMenuPhoto";
+>     
+1160c1165
+<     clientSessions[userId].settingPromptMessageId = msg.message_id;
+---
+>     ctx.session.client.settingPromptMessageId = msg.message_id;
+1166d1170
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+1168d1171
+<     clientSessions[userId].awaitingSettingUpdate = "welcomeTextRu";
+1169a1173,1174
+>     ctx.session.client.awaitingSettingUpdate = "welcomeTextRu";
+>     
+1172c1177
+<     clientSessions[userId].settingPromptMessageId = msg.message_id;
+---
+>     ctx.session.client.settingPromptMessageId = msg.message_id;
+1179d1183
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+1181d1184
+<     clientSessions[userId].awaitingSettingUpdate = "welcomeTextUz";
+1182a1186,1187
+>     ctx.session.client.awaitingSettingUpdate = "welcomeTextUz";
+>     
+1185c1190
+<     clientSessions[userId].settingPromptMessageId = msg.message_id;
+---
+>     ctx.session.client.settingPromptMessageId = msg.message_id;
+1226c1231
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+---
+>     
+1229c1234
+<     clientSessions[userId].awaitingSettingUpdate = settingKey;
+---
+>     ctx.session.client.awaitingSettingUpdate = settingKey;
+1244c1249
+<         clientSessions[userId].settingPromptMessageId = ctx.callbackQuery.message.message_id;
+---
+>         ctx.session.client.settingPromptMessageId = ctx.callbackQuery.message.message_id;
+1251,1253c1256,1258
+<     if (clientSessions[userId]) {
+<         delete clientSessions[userId].awaitingSettingUpdate;
+<         delete clientSessions[userId].settingPromptMessageId;
+---
+>     if (ctx.session.client) {
+>         delete ctx.session.client.awaitingSettingUpdate;
+>         delete ctx.session.client.settingPromptMessageId;
+1379,1380c1384,1385
+<         if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+<         clientSessions[ctx.from.id].awaitingMasterMessage = bId;
+---
+>         
+>         ctx.session.client.awaitingMasterMessage = bId;
+1383c1388
+<         clientSessions[ctx.from.id].msgPromptId = promptMsg.message_id;
+---
+>         ctx.session.client.msgPromptId = promptMsg.message_id;
+1389c1394
+<     if (clientSessions[ctx.from.id]) clientSessions[ctx.from.id].awaitingBroadcast = false;
+---
+>     if (ctx.session.client) ctx.session.client.awaitingBroadcast = false;
+1561c1566
+<         const lang = clientSessions[targetUserId]?.lang || "ru";
+---
+>         const lang = (await mongoose.connection.collection("sessions").findOne({ _id: String(targetUserId) }))?.value?.client?.lang || "ru";
+1645c1650
+<         const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>         const lang = ctx.session.client?.lang || "ru";
+1681,1682d1685
+<     if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = {};
+<     clientSessions[ctx.from.id].lang = lang;
+1683a1687,1688
+>     ctx.session.client.lang = lang;
+>     
+1693,1694c1698,1699
+<     clientSessions[ctx.from.id].menuMessageId = res.message_id;
+<     clientSessions[ctx.from.id].currentImage = imgWelcome;
+---
+>     ctx.session.client.menuMessageId = res.message_id;
+>     ctx.session.client.currentImage = imgWelcome;
+1699c1704
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+1712c1717
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+1750c1755
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+1936c1941
+<     adminSessions[ctx.from.id] = {
+---
+>     ctx.session.admin = {
+1950c1955
+<     adminSessions[ctx.from.id] = {
+---
+>     ctx.session.admin = {
+1964c1969
+<     adminSessions[ctx.from.id] = {
+---
+>     ctx.session.admin = {
+1978c1983
+<     adminSessions[ctx.from.id] = {
+---
+>     ctx.session.admin = {
+2009c2014
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2099c2104
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru"; // Используем твою логику сессий
+---
+>     const lang = ctx.session.client?.lang || "ru"; // Используем твою логику сессий
+2142c2147
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2159,2161c2164,2166
+<     if (!clientSessions[ctx.from.id]) clientSessions[ctx.from.id] = { lang: 'ru' };
+<     clientSessions[ctx.from.id].serviceKey = serviceId;
+<     const lang = clientSessions[ctx.from.id].lang;
+---
+>     
+>     ctx.session.client.serviceKey = serviceId;
+>     const lang = ctx.session.client.lang;
+2211c2216
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2214,2215c2219,2220
+<     if (!clientSessions[ctx.from.id]) {
+<         clientSessions[ctx.from.id] = { lang: lang };
+---
+>     if (!ctx.session.client) {
+>         ctx.session.client = { lang: lang };
+2217c2222
+<     clientSessions[ctx.from.id].serviceKey = serviceId;
+---
+>     ctx.session.client.serviceKey = serviceId;
+2242c2247
+<     const session = clientSessions[ctx.from.id];
+---
+>     const session = ctx.session.client;
+2262,2263d2266
+<     if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+<     const userLang = clientSessions[userId].lang;
+2264a2268,2269
+>     const userLang = ctx.session.client.lang;
+>     
+2315c2320
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2327c2332
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2341,2343c2346,2348
+<     if (!clientSessions[userId]) clientSessions[userId] = { lang: 'ru' };
+<     clientSessions[userId].serviceKey = serviceId;
+<     const lang = clientSessions[userId].lang;
+---
+>     
+>     ctx.session.client.serviceKey = serviceId;
+>     const lang = ctx.session.client.lang;
+2388c2393
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2409,2410c2414,2415
+<     if (!clientSessions[userId]) {
+<         clientSessions[userId] = { lang: 'ru' };
+---
+>     if (!ctx.session.client) {
+>         ctx.session.client = { lang: 'ru' };
+2412,2413c2417,2418
+<     const lang = clientSessions[userId].lang;
+<     clientSessions[userId].serviceKey = serviceId; // Сохраняем выбранную услугу
+---
+>     const lang = ctx.session.client.lang;
+>     ctx.session.client.serviceKey = serviceId; // Сохраняем выбранную услугу
+2439c2444
+<     const session = clientSessions[ctx.from.id];
+---
+>     const session = ctx.session.client;
+2458c2463
+<     let session = clientSessions[ctx.from.id];
+---
+>     let session = ctx.session.client;
+2510c2515
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2521c2526
+<     const session = clientSessions[ctx.from.id];
+---
+>     const session = ctx.session.client;
+2586c2591
+<             const userLang = clientSessions[targetUserId]?.lang || "ru";
+---
+>             const userLang = (await mongoose.connection.collection("sessions").findOne({ _id: String(targetUserId) }))?.value?.client?.lang || "ru";
+2671c2676
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2726c2731
+<         const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>         const lang = ctx.session.client?.lang || "ru";
+2745c2750
+<     const lang = clientSessions[ctx.from.id]?.lang || "ru";
+---
+>     const lang = ctx.session.client?.lang || "ru";
+2803,2804d2807
+<     if (!clientSessions[userId]) clientSessions[userId] = {};
+<     clientSessions[userId].awaitingName = false;
+2806c2809
+<     const lang = clientSessions[userId].lang || "ru";
+---
+>     ctx.session.client.awaitingName = false;
+2807a2811,2812
+>     const lang = ctx.session.client.lang || "ru";
+>     
+2841,2842c2846,2847
+<         clientSessions[userId].menuMessageId = res.message_id;
+<         clientSessions[userId].currentImage = photoToSend;
+---
+>         ctx.session.client.menuMessageId = res.message_id;
+>         ctx.session.client.currentImage = photoToSend;
+2847c2852
+<         clientSessions[userId].currentImage = photoToSend;
+---
+>         ctx.session.client.currentImage = photoToSend;
