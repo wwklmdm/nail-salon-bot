@@ -1,3 +1,4 @@
+process.env.TZ = "Asia/Tashkent";
 const { Bot, InlineKeyboard } = require("grammy");
 const cron = require("node-cron");
 const mongoose = require("mongoose");
@@ -329,7 +330,7 @@ const newBooking = new Booking({
             const minimalKb = new InlineKeyboard()
                 .text(lang === "ru" ? "🏠 В главное меню" : "🏠 Asosiy menyuga", "back_to_start").row()
                 .text(lang === "ru" ? "Забронировать еще" : " Yana band qilish", "view_all_services").row()
-                .text(lang === "ru" ? "📅 Мои записи" : "📅 Mening yozuvlarim", "view_my_bookings");
+               // .text(lang === "ru" ? "📅 Мои записи" : "📅 Mening yozuvlarim", "view_my_bookings");
                 
             const textMenu = lang === "ru" ? "✨ Что делать дальше?" : "✨ Keyin nima qilamiz?";
             const sentMenu = await bot.api.sendMessage(userId, textMenu, {
@@ -641,7 +642,7 @@ const LANG = {
     uz: {
         welcome: "Salom, {name}! 👋\nStudiyamizga xush kelibsiz. Kerakli bo'limni tanlang:",
         main_menu_title: "✨ **Asosiy menyu:**",
-    services: "📅 Band qilish",
+        services: "📅 Band qilish",
         portfolio: "📸 Bizning ishlar",
         my_bookings: "📋 Mening yozuvlarim",
         contacts: "📞 Aloqa",
@@ -698,7 +699,12 @@ cron.schedule("*/30 * * * *", async () => {
                 } catch (e) { console.error("Ошибка отправки напоминания:", e) }
             }
         }
-    } catch (err) { console.error("Ошибка в cron:", err) }
+      } catch (err) {
+        console.error("Ошибка в cron:", err);
+    }
+
+}, {
+    timezone: "Asia/Tashkent"
 });
 
 function sortBookings(bookingsArray) {
@@ -1022,7 +1028,7 @@ async function getMainMenuKeyboard(lang) {
 
     const keyboard = new InlineKeyboard()
         .text(t.services, "view_all_services").row()
-        .text(t.my_bookings, "view_my_bookings").row()
+        //.text(t.my_bookings, "view_my_bookings").row()
         .text(t.contacts, "view_contacts").row()
         .text(t.address, "view_address").row()
 
@@ -2198,7 +2204,7 @@ bot.callbackQuery(/^admintime_/, async (ctx) => {
 
         const msg = lang === "ru" 
             ? `🔄 **Внимание! Мастер предлагает перенести вашу запись.**\n\n💅 Услуга: ${serviceNameRu}\nПредлагаемая дата: **${newDateText}**\nПредлагаемое время: **${newTime}**\n\nВы согласны?`
-            : `🔄 **Diqqat! Usta yozuvingizni boshqa vaqtga ko'chirishni taklif qilmoqda.**\n\n💅 Xizmat: ${serviceNameUz}\nTaklif qilinayotgan sana: **${newDateText}**\nTaklif qilinayotgan vaqt: **${newTime}**\n\nRozimisiz?`;
+            : `🔄 **Diqqat! Master yozuvingizni boshqa vaqtga ko'chirishni taklif qilmoqda.**\n\n💅 Xizmat: ${serviceNameUz}\nTaklif qilinayotgan sana: **${newDateText}**\nTaklif qilinayotgan vaqt: **${newTime}**\n\nRozimisiz?`;
 
         // В кнопки согласия передаем короткие данные (дата в формате YYYY-MM-DD и время)
         const kb = new InlineKeyboard()
@@ -3258,7 +3264,7 @@ bot.callbackQuery(/^master_reason_/, async (ctx) => {
         try {
             const notifyMsg = userLang === "ru"
                 ? `❌ **К сожалению, мастер отменил вашу запись.**\n\n💬 **Причина:** ${reason}\n\nПожалуйста, выберите другое время.`
-                : `❌ **Afsuski, usta yozuvingizni bekor qildi.**\n\n💬 **Sabab:** ${reason}\n\nIltimos, boshqa vaqtni tanlang.`;
+                : `❌ **Afsuski, master yozuvingizni bekor qildi.**\n\n💬 **Sabab:** ${reason}\n\nIltimos, boshqa vaqtni tanlang.`;
             
             const kb = new InlineKeyboard()
                 .text(userLang === "ru" ? "📅 Выбрать другое время" : "📅 Boshqa vaqtni tanlash", `open_calendar_${booking.serviceKey}`);

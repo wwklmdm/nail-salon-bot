@@ -594,8 +594,19 @@ const userIds = new Set();
 const broadcastHistory = []; 
 const cancelledBookings = [];
 
-const TIME_SLOTS = ["10:00", "12:00", "14:00", "16:00", "18:00"];
-
+const TIME_SLOTS = [
+    "10:00",
+    "11:00",
+    "12:00",
+    "13:00",
+    "14:00",
+    "15:00",
+    "16:00",
+    "17:00",
+    "18:00",
+    "19:00",
+    "20:00"
+];
 const CANCEL_REASONS = [
     "Изменились планы", 
     "Не получается по времени", 
@@ -2187,7 +2198,7 @@ bot.callbackQuery(/^admintime_/, async (ctx) => {
 
         const msg = lang === "ru" 
             ? `🔄 **Внимание! Мастер предлагает перенести вашу запись.**\n\n💅 Услуга: ${serviceNameRu}\nПредлагаемая дата: **${newDateText}**\nПредлагаемое время: **${newTime}**\n\nВы согласны?`
-            : `🔄 **Diqqat! Usta yozuvingizni boshqa vaqtga ko'chirishni taklif qilmoqda.**\n\n💅 Xizmat: ${serviceNameUz}\nTaklif qilinayotgan sana: **${newDateText}**\nTaklif qilinayotgan vaqt: **${newTime}**\n\nRozimisiz?`;
+            : `🔄 **Diqqat! Master yozuvingizni boshqa vaqtga ko'chirishni taklif qilmoqda.**\n\n💅 Xizmat: ${serviceNameUz}\nTaklif qilinayotgan sana: **${newDateText}**\nTaklif qilinayotgan vaqt: **${newTime}**\n\nRozimisiz?`;
 
         // В кнопки согласия передаем короткие данные (дата в формате YYYY-MM-DD и время)
         const kb = new InlineKeyboard()
@@ -3247,7 +3258,7 @@ bot.callbackQuery(/^master_reason_/, async (ctx) => {
         try {
             const notifyMsg = userLang === "ru"
                 ? `❌ **К сожалению, мастер отменил вашу запись.**\n\n💬 **Причина:** ${reason}\n\nПожалуйста, выберите другое время.`
-                : `❌ **Afsuski, usta yozuvingizni bekor qildi.**\n\n💬 **Sabab:** ${reason}\n\nIltimos, boshqa vaqtni tanlang.`;
+                : `❌ **Afsuski, master yozuvingizni bekor qildi.**\n\n💬 **Sabab:** ${reason}\n\nIltimos, boshqa vaqtni tanlang.`;
             
             const kb = new InlineKeyboard()
                 .text(userLang === "ru" ? "📅 Выбрать другое время" : "📅 Boshqa vaqtni tanlash", `open_calendar_${booking.serviceKey}`);
