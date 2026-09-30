@@ -1,3 +1,4 @@
+process.env.TZ = "Asia/Tashkent";
 const { Bot, InlineKeyboard } = require("grammy");
 const cron = require("node-cron");
 const mongoose = require("mongoose");
@@ -128,7 +129,7 @@ bot.command("start", async (ctx) => {
     if (userIdStr === String(MASTER_CHAT_ID)) { 
         // Мы убрали ctx.deleteMessage() отсюда
         
-        const res = await ctx.reply("👨‍💻 <b>Панель управления мастером</b>\n\nВыберите действие:", {
+        const res = await ctx.reply("👨‍💻 <b>Панель управления Мастера</b>\n\nВыберите действие:", {
             parse_mode: "HTML", 
             reply_markup: getAdminKeyboard()
         });
@@ -329,7 +330,7 @@ const newBooking = new Booking({
             const minimalKb = new InlineKeyboard()
                 .text(lang === "ru" ? "🏠 В главное меню" : "🏠 Asosiy menyuga", "back_to_start").row()
                 .text(lang === "ru" ? "Забронировать еще" : " Yana band qilish", "view_all_services").row()
-                .text(lang === "ru" ? "📅 Мои записи" : "📅 Mening yozuvlarim", "view_my_bookings");
+               // .text(lang === "ru" ? "📅 Мои записи" : "📅 Mening yozuvlarim", "view_my_bookings");
                 
             const textMenu = lang === "ru" ? "✨ Что делать дальше?" : "✨ Keyin nima qilamiz?";
             const sentMenu = await bot.api.sendMessage(userId, textMenu, {
@@ -357,7 +358,6 @@ const newBooking = new Booking({
             try {
                 const masterKb = new InlineKeyboard()
                     .text("✅ Подтвердить", `admin_conf_${bookingId}`).row()
-                    .text("🔄 Перенести", `admin_resch_${bookingId}`).row()
                     .text("❌ Отклонить", `admin_rej_${bookingId}`);
                     
                 const adminMsg = `🔔 **НОВАЯ ЗАЯВКА!**\n\n👤 Имя: **${text}**\n🔗 ТГ: ${ctx.from.first_name} (${newBooking.username})\n💅 Услуга: ${serviceNameAdmin}\n📅 Дата: ${clientSession.dateText}\n🕐 Время: ${clientSession.time}`;
@@ -641,7 +641,7 @@ const LANG = {
     uz: {
         welcome: "Salom, {name}! 👋\nStudiyamizga xush kelibsiz. Kerakli bo'limni tanlang:",
         main_menu_title: "✨ **Asosiy menyu:**",
-    services: "📅 Band qilish",
+        services: "📅 Band qilish",
         portfolio: "📸 Bizning ishlar",
         my_bookings: "📋 Mening yozuvlarim",
         contacts: "📞 Aloqa",
@@ -698,7 +698,12 @@ cron.schedule("*/30 * * * *", async () => {
                 } catch (e) { console.error("Ошибка отправки напоминания:", e) }
             }
         }
-    } catch (err) { console.error("Ошибка в cron:", err) }
+      } catch (err) {
+        console.error("Ошибка в cron:", err);
+    }
+
+}, {
+    timezone: "Asia/Tashkent"
 });
 
 function sortBookings(bookingsArray) {
@@ -817,10 +822,7 @@ async function refreshAdminMenu() {
                     `⏰ Время: ${b.time} (${b.username})\n\n`;
 
                 // Кнопки сразу под конкретной записью
-                kb.text(
-                    `🔄 Перенести №${index + 1}`,
-                    `admin_resch_${b._id}`
-                );
+               
 
                 kb.text(
                     `❌ Отменить №${index + 1}`,
@@ -926,10 +928,7 @@ async function refreshAdminMenu() {
                     `👤 ${b.username}\n\n`;
 
                 // Кнопки сразу под конкретной записью
-                kb.text(
-                    "🔄 Перенести",
-                    `admin_resch_${b._id}`
-                );
+             
 
                 kb.text(
                     "❌ Отменить",
@@ -974,7 +973,7 @@ async function refreshAdminMenu() {
             await bot.api.editMessageText(
                 MASTER_CHAT_ID,
                 session.adminMenuMessageId,
-                "👨‍💻 **Панель управления мастером**\n\n" +
+                "👨‍💻 Панель управления Мастера\n\n" +
                 "Здесь вы можете управлять своими записями.\n" +
                 "Выберите действие:",
                 {
@@ -987,6 +986,58 @@ async function refreshAdminMenu() {
     } catch (e) {
         console.error("Error in refreshAdminMenu:", e);
     }
+}
+
+
+async function renderNewRequests(ctx) {
+    const bookings = await Booking.find({
+        status: "pending"
+    }).sort({ _id: 1 });
+
+    const kb = new InlineKeyboard();
+
+    if (bookings.length === 0) {
+        kb.text("⬅️ Назад", "back_to_admin");
+
+        return await ctx.editMessageText(
+            "🔔 **Новые заявки**\n\n" +
+            "Новых заявок нет. ✨",
+            {
+                parse_mode: "Markdown",
+                reply_markup: kb
+            }
+        );
+    }
+
+    let text = `🔔 **НОВЫЕ ЗАЯВКИ (${bookings.length})**\n\n`;
+
+    bookings.forEach((b) => {
+        text +=
+            `🔔 **НОВАЯ ЗАЯВКА!**\n\n` +
+            `👤 Имя: ${b.clientName}\n` +
+            `🔗 ТГ: ${b.username || "Скрыт"}\n` +
+            `💅 Услуга: ${b.serviceNameRu || "Услуга"}\n` +
+            `📅 Дата: ${b.dateText}\n` +
+            `🕐 Время: ${b.time}\n\n` +
+            `━━━━━━━━━━━━━━\n\n`;
+
+        kb.text(
+            "✅ Подтвердить",
+            `admin_conf_${b._id}`
+        ).row();
+
+        kb.text(
+            "❌ Отклонить",
+            `admin_rej_${b._id}`
+        ).row();
+    });
+
+    kb.text("⬅️ Назад", "back_to_admin");
+
+    return await ctx.editMessageText(text, {
+        parse_mode: "Markdown",
+        reply_markup: kb
+    });
 }
 
 async function smartUpdate(ctx, newImageUrl, newCaption, newKeyboard) {
@@ -1022,7 +1073,7 @@ async function getMainMenuKeyboard(lang) {
 
     const keyboard = new InlineKeyboard()
         .text(t.services, "view_all_services").row()
-        .text(t.my_bookings, "view_my_bookings").row()
+        //.text(t.my_bookings, "view_my_bookings").row()
         .text(t.contacts, "view_contacts").row()
         .text(t.address, "view_address").row()
 
@@ -1045,12 +1096,14 @@ bot.callbackQuery("ignore", async (ctx) => {
 
 function getAdminKeyboard() {
     return new InlineKeyboard()
-        .text("📊 Статистика", "admin_statistics").row()
-        .text("📋 Будущие записи", "admin_all_bookings").row()
+        .text("🔔 Новые заявки", "admin_new_requests").row()
+        .text("⏳ Ожидаемые записи", "admin_all_bookings").row()
         .text("📅 На сегодня", "admin_today_bookings").row()
+        .text("_", "ignore").row()
+        .text("📊 Статистика", "admin_statistics").row()
+        .text("⚙️ Настройки", "admin_settings").row() 
         .text("📢 Сделать рассылку", "admin_broadcast_init").row()
-        .text("📜 История рассылок", "admin_broadcast_history").row()
-        .text("⚙️ Настройки", "admin_settings"); 
+        .text("📜 История рассылок", "admin_broadcast_history");
 }
 
 // ТЕПЕРЬ ФУНКЦИЯ АСИНХРОННАЯ, ТАК КАК БЕРЕТ ДАННЫЕ ИЗ БД!
@@ -1303,6 +1356,16 @@ bot.callbackQuery("admin_edit_main_menu", async (ctx) => {
     });
 });
 
+bot.callbackQuery("admin_new_requests", async (ctx) => {
+    await ctx.answerCallbackQuery();
+
+    try {
+        await renderNewRequests(ctx);
+    } catch (err) {
+        console.error("Ошибка admin_new_requests:", err);
+    }
+});
+
 // Админ нажал "Изменить фото"
 bot.callbackQuery("admin_edit_main_photo", async (ctx) => {
     await ctx.answerCallbackQuery().catch(()=>{});
@@ -1521,7 +1584,7 @@ bot.callbackQuery("admin_settings", async (ctx) => {
 bot.callbackQuery("back_to_admin_main", async (ctx) => {
     await ctx.answerCallbackQuery().catch(()=>{});
     try {
-        await ctx.editMessageText("👋 Добро пожаловать в панель управления, Мастер!", {
+        await ctx.editMessageText("👨‍💻 Панель управления Мастера\n\nВыберите действие:",  {
             reply_markup: getAdminKeyboard()
         });
     } catch (e) {}
@@ -1836,10 +1899,7 @@ futureBookings
         // Кнопки в одну строку:
         // 🔄 Перенести | 💬 Сообщение | ❌ Отменить
         // Кнопки в одной строке
-kb.text(
-    `🔄 Перенести №${index + 1}`,
-    `admin_resch_${b._id}`
-);
+
 
 kb.text(
     `❌ Отменить №${index + 1}`,
@@ -1881,14 +1941,24 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
         });
 
         const bookings = await Booking.find({
-            dateText: todayStr,
-            status: { $in: ["pending", "confirmed"] }
-        });
+    dateText: todayStr,
+    status: { $in: ["pending", "confirmed"] }
+});
+
+// Убираем записи, время которых уже прошло
+const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+const activeBookings = bookings.filter((b) => {
+    const [hours, minutes] = b.time.split(":").map(Number);
+    const bookingMinutes = hours * 60 + minutes;
+
+    return bookingMinutes > currentMinutes;
+});
 
         const kb = new InlineKeyboard();
 
-        if (bookings.length === 0) {
-            kb.text("⬅️ Назад", "back_to_admin");
+if (activeBookings.length === 0) {
+        kb.text("⬅️ Назад", "back_to_admin");
 
             return await ctx.editMessageText(
                 `📅 **Расписание на сегодня (${todayStr}):**\n\n` +
@@ -1901,7 +1971,7 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
         }
 
         // Сортируем по времени
-        bookings.sort((a, b) => {
+        activeBookings.sort((a, b) => {
             const getTime = (booking) => {
                 const [hours, minutes] = booking.time.split(":").map(Number);
 
@@ -1918,9 +1988,9 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
         });
 
         let text =
-            `📅 **Расписание на сегодня (${todayStr}) - ${bookings.length} шт.:**\n\n`;
+            `📅 **Расписание на сегодня (${todayStr}) - ${activeBookings.length} шт.:**\n\n`;
 
-        bookings.forEach((b, index) => {
+        activeBookings.forEach((b, index) => {
             const serviceName =
                 serviceMap[b.serviceKey] ||
                 b.serviceNameRu ||
@@ -1936,37 +2006,17 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
                 minutes
             );
 
-            const isPassed = bookingDate <= now;
+ const status =
+    b.status === "pending" ? "⏳" : "✅";
 
-            if (isPassed) {
-                text +=
-                    `${index + 1}. ⌛ **ПРОШЛО**\n` +
-                    `👤 **${b.clientName}** | ${serviceName}\n` +
-                    `⏰ ${b.time} (${b.username})\n\n`;
+text +=
+    `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n` +
+    `⏰ ${b.time} (${b.username})\n\n`;
 
-            } else {
-                const status =
-                    b.status === "pending" ? "⏳" : "✅";
-
-                text +=
-                    `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n` +
-                    `⏰ ${b.time} (${b.username})\n\n`;
-
-                // Кнопки только для будущих записей
-                kb.text(
-                    `🔄 Перенести №${index + 1}`,
-                    `admin_resch_${b._id}`
-                );
-
-                kb.text(
-                    `❌ Отменить №${index + 1}`,
-                    `admin_rej_${b._id}`
-                ).row();
-
-                // Отдельная кнопка сообщения
-                
-                
-            }
+kb.text(
+    `❌ Отменить №${index + 1}`,
+    `admin_rej_${b._id}`
+).row();
         });
 
         kb.text("⬅️ Назад", "back_to_admin");
@@ -2007,7 +2057,7 @@ bot.callbackQuery(/^admin_msg_/, async (ctx) => {
 bot.callbackQuery("back_to_admin", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (clientSessions[ctx.from.id]) clientSessions[ctx.from.id].awaitingBroadcast = false;
-    await ctx.editMessageText("👨‍💻 **Панель управления мастером**\n\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
+    await ctx.editMessageText("👨‍💻 Панель управления Мастера\n\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
 });
 
 // ====== ЛОГИКА ПЕРЕНОСА (МАСТЕР) ======
@@ -2221,64 +2271,133 @@ bot.callbackQuery(/^admintime_/, async (ctx) => {
 
 // ==========================================
 // ОТВЕТ КЛИЕНТА НА ПЕРЕНОС (СОГЛАСИЕ)
-// ==========================================
+
 bot.callbackQuery(/^client_acc_resch_/, async (ctx) => {
-    // Убираем часики на кнопке
     await ctx.answerCallbackQuery().catch(() => {});
-    
-    // Разбираем нашу новую КОРОТКУЮ строку: client_acc_resch_bId_YYYY-MM-DD_HH:MM
-    const parts = ctx.callbackQuery.data.replace("client_acc_resch_", "").split("_");
+
+    const parts = ctx.callbackQuery.data
+        .replace("client_acc_resch_", "")
+        .split("_");
+
     const bId = parts[0];
     const newDate = parts[1]; // YYYY-MM-DD
     const newTime = parts[2]; // HH:MM
-    
-    // Самостоятельно собираем красивую дату для текста (чтобы не передавать ее в кнопке)
+
     const dateParts = newDate.split("-");
     const newDateText = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
 
     try {
         const booking = await Booking.findById(bId);
-        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена или удалена!", show_alert: true });
 
-        // Удаляем сообщение с вопросом у клиента
-        try { await ctx.deleteMessage(); } catch(e){}
+        if (!booking) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Запись не найдена или уже удалена!",
+                show_alert: true
+            });
+        }
 
-        // ОБНОВЛЯЕМ ДАННЫЕ В БД (Теперь time передается корректно!)
+        // Проверяем, что именно этот клиент принимает перенос
+        if (String(booking.userId) !== String(ctx.from.id)) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Эта запись принадлежит другому клиенту.",
+                show_alert: true
+            });
+        }
+
+        // ВАЖНО:
+        // ещё раз проверяем, не занял ли кто-то новое время,
+        // пока клиент думал над предложением мастера.
+        const conflict = await Booking.exists({
+            date: newDate,
+            time: newTime,
+            status: { $in: ["pending", "confirmed"] },
+            _id: { $ne: bId }
+        });
+
+        if (conflict) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Это время уже заняли. Выберите другое время.",
+                show_alert: true
+            });
+        }
+
+        // ==========================================
+        // ПЕРЕНОСИМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ
+        // ==========================================
+
         booking.date = newDate;
         booking.dateText = newDateText;
         booking.time = newTime;
         booking.status = "confirmed";
-        await booking.save(); 
 
-        // Безопасно достаем название услуги
-        let serviceNameRu = "Услуга";
-        let serviceNameUz = "Xizmat";
+        // Чтобы напоминание отправилось заново
+        booking.reminderSent = false;
+
+        await booking.save();
+
+        // Удаляем сообщение с кнопками только ПОСЛЕ успешного сохранения
         try {
-            const service = await Service.findOne({ key: booking.serviceKey });
-            if (service) {
-                serviceNameRu = service.name.ru;
-                serviceNameUz = service.name.uz || service.name.ru;
-            }
+            await ctx.deleteMessage();
         } catch (e) {}
 
-        // Отправляем уведомление клиенту
-        const lang = clientSessions[ctx.from.id]?.lang || "ru";
-        const msgClient = lang === "ru"
-            ? `✅ **Вы успешно подтвердили перенос!**\n\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: **${newDateText}**\n🕐 Новое время: **${newTime}**\n\nЖдем вас! ✨`
-            : `✅ **Siz ko'chirishni muvaffaqiyatli tasdiqladingiz!**\n\n💅 Xizmat: ${serviceNameUz}\n📅 Yangi sana: **${newDateText}**\n🕐 Yangi vaqt: **${newTime}**\n\nSizni kutamiz! ✨`;
-        
-        await ctx.reply(msgClient, { parse_mode: "Markdown" });
+        // Получаем название услуги
+        let serviceNameRu = booking.serviceNameRu;
+        let serviceNameUz = booking.serviceNameUz;
 
-        // Отправляем уведомление мастеру
+        try {
+            const service = await Service.findOne({
+                key: booking.serviceKey
+            });
+
+            if (service) {
+                serviceNameRu = service.nameRu || serviceNameRu;
+                serviceNameUz = service.nameUz || serviceNameUz;
+            }
+        } catch (e) {
+            console.error("Ошибка получения услуги:", e);
+        }
+
+        const lang = clientSessions[ctx.from.id]?.lang || "ru";
+
+        // Сообщение клиенту
+        const msgClient = lang === "ru"
+            ? `✅ **Запись перенесена!**\n\n` +
+              `💅 Услуга: ${serviceNameRu}\n` +
+              `📅 Дата: **${newDateText}**\n` +
+              `🕐 Время: **${newTime}**\n\n` +
+              `Мастер подтвердил новое время. Ждём вас!`
+            : `✅ **Yozuvingiz ko'chirildi!**\n\n` +
+              `💅 Xizmat: ${serviceNameUz}\n` +
+              `📅 Sana: **${newDateText}**\n` +
+              `🕐 Vaqt: **${newTime}**\n\n` +
+              `Usta yangi vaqtni tasdiqladi. Sizni kutamiz!`;
+
+        await ctx.reply(msgClient, {
+            parse_mode: "Markdown"
+        });
+
+        // Сообщение мастеру
         await bot.api.sendMessage(
-            MASTER_CHAT_ID, 
-            `✅ **Клиент СОГЛАСИЛСЯ на перенос**\n\n👤 Имя: ${booking.clientName}\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: ${newDateText}\n🕐 Новое время: ${newTime}`, 
-            { parse_mode: "Markdown" }
+            MASTER_CHAT_ID,
+            `✅ **Клиент согласился на перенос**\n\n` +
+            `👤 Клиент: ${booking.clientName}\n` +
+            `💅 Услуга: ${serviceNameRu}\n` +
+            `📅 Новая дата: **${newDateText}**\n` +
+            `🕐 Новое время: **${newTime}**`,
+            {
+                parse_mode: "Markdown"
+            }
         );
 
     } catch (e) {
-        console.error("❌ ОШИБКА ПРИ ПОДТВЕРЖДЕНИИ ПЕРЕНОСА КЛИЕНТОМ:", e);
-        await ctx.reply("Произошла ошибка при сохранении. Обратитесь к администратору.").catch(()=>{});
+        console.error(
+            "❌ ОШИБКА ПРИ ПОДТВЕРЖДЕНИИ ПЕРЕНОСА КЛИЕНТОМ:",
+            e
+        );
+
+        await ctx.reply(
+            "Произошла ошибка при сохранении. Обратитесь к администратору."
+        ).catch(() => {});
     }
 });
 
@@ -3055,7 +3174,24 @@ bot.callbackQuery(/^m_/, async (ctx) => {
 });
 
 
+function getTashkentNow() {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Tashkent",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+    }).formatToParts(new Date());
 
+    const get = (type) => parts.find(p => p.type === type)?.value;
+
+    return {
+        date: `${get("year")}-${get("month")}-${get("day")}`,
+        minutes: Number(get("hour")) * 60 + Number(get("minute"))
+    };
+}
 
 
 // ==========================================
@@ -3080,23 +3216,40 @@ bot.callbackQuery(/^date_/, async (ctx) => {
     session.date = `${parts[0]}-${mString}-${dString}`;
     session.dateText = `${dString}.${mString}.${parts[0]}`;
 
-    try {
-        const activeBookings = await Booking.find({ 
-            date: session.date, 
-            status: { $in: ["pending", "confirmed"] } 
-        });
-        const bookedTimes = activeBookings.map(b => b.time);
+try { 
+    const activeBookings = await Booking.find({  
+        date: session.date,  
+        status: { $in: ["pending", "confirmed"] }  
+    }); 
 
-        const kb = new InlineKeyboard();
-        TIME_SLOTS.forEach((time, index) => {
-            const isBooked = bookedTimes.includes(time);
-            if (isBooked) {
-                kb.text(`❌ ${time}`, `slot_already_booked`);
-            } else {
-                kb.text(time, `book_time_${time}`);
-            }
-            if ((index + 1) % 2 === 0) kb.row();
-        });
+    const bookedTimes = activeBookings.map(b => b.time); 
+
+    const kb = new InlineKeyboard();
+
+    // Текущее время именно по Ташкенту
+    const tashkentNow = getTashkentNow();
+
+    TIME_SLOTS.forEach((time, index) => { 
+        const isBooked = bookedTimes.includes(time);
+
+        // Переводим время слота в минуты
+        const [hours, minutes] = time.split(":").map(Number);
+        const slotMinutes = hours * 60 + minutes;
+
+        // Закрываем прошедшие слоты только для сегодняшней даты
+        const isPast = session.date === tashkentNow.date &&
+                       slotMinutes <= tashkentNow.minutes;
+
+        if (isBooked) { 
+            kb.text(`❌ ${time}`, `slot_already_booked`); 
+        } else if (isPast) {
+            kb.text(`🔒 ${time}`, `slot_already_past`);
+        } else { 
+            kb.text(time, `book_time_${time}`); 
+        }
+
+        if ((index + 1) % 2 === 0) kb.row(); 
+    });
         kb.row().text(LANG[lang].back, `open_calendar_${session.serviceKey}`);
 
         const service = await Service.findById(session.serviceKey);
@@ -3116,9 +3269,15 @@ bot.callbackQuery(/^date_/, async (ctx) => {
     }
 });
 
-bot.callbackQuery("slot_already_booked", async (ctx) => {
+bot.callbackQuery("slot_already_past", async (ctx) => {
     const lang = clientSessions[ctx.from.id]?.lang || "ru";
-    await ctx.answerCallbackQuery({ text: lang === "ru" ? "⚠️ Это время уже занято!" : "⚠️ Bu vaqt allaqochon band qilingan!", show_alert: true });
+
+    await ctx.answerCallbackQuery({
+        text: lang === "ru"
+            ? "🔒 Это время уже прошло!"
+            : "🔒 Bu vaqt allaqachon o'tib ketgan!",
+        show_alert: true
+    });
 });
 
 // ==========================================
@@ -3138,6 +3297,23 @@ bot.callbackQuery(/^book_time_/, async (ctx) => {
     }
     
     const lang = session.lang || "ru";
+
+    const tashkentNow = getTashkentNow();
+
+const [hours, minutes] = time.split(":").map(Number);
+const slotMinutes = hours * 60 + minutes;
+
+const isPast = session.date === tashkentNow.date &&
+               slotMinutes <= tashkentNow.minutes;
+
+if (isPast) {
+    return ctx.answerCallbackQuery({
+        text: lang === "ru"
+            ? "🔒 Это время уже прошло! Выберите другое."
+            : "🔒 Bu vaqt allaqachon o'tib ketgan! Boshqa vaqtni tanlang.",
+        show_alert: true
+    }).catch(() => {});
+}
 
     try {
         const isBooked = await Booking.exists({ 
@@ -3166,6 +3342,38 @@ bot.callbackQuery(/^book_time_/, async (ctx) => {
     }
 });
 
+async function showMasterResultAndMenu(ctx, resultText) {
+    try {
+        // Показываем результат на месте заявки
+        await ctx.editMessageText(resultText, {
+            parse_mode: "Markdown"
+        });
+
+        // Сразу отправляем главное меню отдельным сообщением
+        const menuMsg = await bot.api.sendMessage(
+            MASTER_CHAT_ID,
+            "👨‍💻 **Панель управления мастером**\n\nВыберите действие:",
+            {
+                parse_mode: "Markdown",
+                reply_markup: getAdminKeyboard()
+            }
+        );
+
+        // Через 10 секунд удаляем сообщение с результатом
+        setTimeout(async () => {
+            try {
+                await bot.api.deleteMessage(
+                    MASTER_CHAT_ID,
+                    ctx.callbackQuery.message.message_id
+                );
+            } catch (e) {}
+        }, 10000);
+
+    } catch (err) {
+        console.error("Ошибка показа результата мастеру:", err);
+    }
+}
+
 // ==========================================
 // 23. ПРИНЯТИЕ / ОТКЛОНЕНИЕ ЗАЯВКИ МАСТЕРОМ
 // ==========================================
@@ -3185,12 +3393,17 @@ bot.callbackQuery(/^admin_conf_/, async (ctx) => {
             try { await bot.api.deleteMessage(targetUserId, booking.pendingMessageId); } catch(e){}
         }
         
-        await ctx.editMessageText(`✅ **ВЫ ПОДТВЕРДИЛИ ЗАПИСЬ**\n\nКлиент: ${booking.clientName}\nДата: ${booking.dateText} в ${booking.time}`, { parse_mode: "Markdown" });
-        await ctx.answerCallbackQuery({ text: "Подтверждено!", show_alert: false });
-       
-        setTimeout(async () => { 
-            try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} 
-        }, 30000);
+        await ctx.answerCallbackQuery({
+    text: "Подтверждено!",
+    show_alert: false
+});
+
+await showMasterResultAndMenu(
+    ctx,
+    `✅ **ВЫ ПОДТВЕРДИЛИ ЗАПИСЬ**\n\n` +
+    `Клиент: ${booking.clientName}\n` +
+    `Дата: ${booking.dateText} в ${booking.time}`
+);
        
         try {
             const userLang = clientSessions[targetUserId]?.lang || "ru";
@@ -3252,9 +3465,13 @@ bot.callbackQuery(/^master_reason_/, async (ctx) => {
         booking.cancelledBy = "master";
         await booking.save();
         
-        await ctx.editMessageText(`❌ **Запись отменена**\n\nПричина отправлена клиенту: ${reason}`, { parse_mode: "Markdown" });
-        setTimeout(async () => { try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} }, 10000);
-        
+await showMasterResultAndMenu(
+    ctx,
+    `❌ **ЗАПИСЬ ОТМЕНЕНА**\n\n` +
+    `Клиент: ${booking.clientName}\n` +
+    `Дата: ${booking.dateText} в ${booking.time}\n\n` +
+    `Причина: ${reason}`
+);        
         try {
             const notifyMsg = userLang === "ru"
                 ? `❌ **К сожалению, мастер отменил вашу запись.**\n\n💬 **Причина:** ${reason}\n\nПожалуйста, выберите другое время.`

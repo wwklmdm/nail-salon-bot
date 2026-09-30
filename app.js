@@ -93,7 +93,7 @@ async function initDatabase() {
 const DB_USER = "baxtiyorovusmon30_db_user";
 const DB_PASS = encodeURIComponent("7MSV5O9ttCpiZCHL");
 const MONGO_URI = `mongodb+srv://${encodeURIComponent(DB_USER)}:${encodeURIComponent(DB_PASS)}@cluster0.wdiu32k.mongodb.net/salon_db?retryWrites=true&w=majority&appName=Cluster0`;
-const BOT_TOKEN = "8913984681:AAGkZFjBP6bnisOkhyin3Ujtuov3xuPKxvM";
+const BOT_TOKEN = "8944042117:AAHnkgvHQrggD-6-JeQmt6RQN2zwyhAMFIA";
 const MASTER_CHAT_ID = "1459629617";
 const bot = new Bot(BOT_TOKEN);
 
@@ -129,7 +129,7 @@ bot.command("start", async (ctx) => {
     if (userIdStr === String(MASTER_CHAT_ID)) { 
         // Мы убрали ctx.deleteMessage() отсюда
         
-        const res = await ctx.reply("👨‍💻 <b>Панель управления мастером</b>\n\nВыберите действие:", {
+        const res = await ctx.reply("👨‍💻 <b>Панель управления Мастера</b>\n\nВыберите действие:", {
             parse_mode: "HTML", 
             reply_markup: getAdminKeyboard()
         });
@@ -261,8 +261,8 @@ if (ctx.message?.text?.startsWith("/")) return await next();
                 try { await bot.api.deleteMessage(MASTER_CHAT_ID, clientSession.adminMenuMessageId); } catch(e){}
             }
             
-            const now = new Date();
-            const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth()+1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+           const now = getTashkentNow();
+const dateStr = `${now.dateText} ${String(now.hours).padStart(2, "0")}:${String(now.minutes).padStart(2, "0")}`;
             broadcastHistory.unshift({ text: text, date: dateStr });
             if (broadcastHistory.length > 10) broadcastHistory.pop(); 
 
@@ -358,7 +358,6 @@ const newBooking = new Booking({
             try {
                 const masterKb = new InlineKeyboard()
                     .text("✅ Подтвердить", `admin_conf_${bookingId}`).row()
-                    .text("🔄 Перенести", `admin_resch_${bookingId}`).row()
                     .text("❌ Отклонить", `admin_rej_${bookingId}`);
                     
                 const adminMsg = `🔔 **НОВАЯ ЗАЯВКА!**\n\n👤 Имя: **${text}**\n🔗 ТГ: ${ctx.from.first_name} (${newBooking.username})\n💅 Услуга: ${serviceNameAdmin}\n📅 Дата: ${clientSession.dateText}\n🕐 Время: ${clientSession.time}`;
@@ -669,15 +668,21 @@ const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель
 // ==========================================
 
 cron.schedule("*/30 * * * *", async () => {
-    const now = new Date();
+    const tashkentNow = getTashkentNow();
     try {
         const bookings = await Booking.find({ status: "confirmed", reminderSent: false });
         
         for (const booking of bookings) {
-            const [day, month, year] = booking.dateText.split('.').map(Number);
-            const [hours, minutes] = booking.time.split(':').map(Number);
-            const bookingDate = new Date(year, month - 1, day, hours, minutes);
-            const diffInMinutes = (bookingDate - now) / 60000;
+           const [day, month, year] = booking.dateText.split('.').map(Number);
+const [hours, minutes] = booking.time.split(':').map(Number);
+
+const bookingTotalMinutes =
+    (((year * 12 + month) * 31 + day) * 24 + hours) * 60 + minutes;
+
+const nowTotalMinutes =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day) * 24 + tashkentNow.hours) * 60 + tashkentNow.minutes;
+
+const diffInMinutes = bookingTotalMinutes - nowTotalMinutes;
 
             if (diffInMinutes > 120 && diffInMinutes <= 150) {
                 try {
@@ -711,13 +716,17 @@ function sortBookings(bookingsArray) {
     return bookingsArray.sort((a, b) => {
         const [dayA, monthA, yearA] = a.dateText.split('.').map(Number);
         const [hourA, minA] = a.time.split(':').map(Number);
-        const dateA = new Date(yearA, monthA - 1, dayA, hourA, minA);
 
         const [dayB, monthB, yearB] = b.dateText.split('.').map(Number);
         const [hourB, minB] = b.time.split(':').map(Number);
-        const dateB = new Date(yearB, monthB - 1, dayB, hourB, minB);
 
-        return dateA - dateB;
+        const totalA =
+            (((yearA * 12 + monthA) * 31 + dayA) * 24 + hourA) * 60 + minA;
+
+        const totalB =
+            (((yearB * 12 + monthB) * 31 + dayB) * 24 + hourB) * 60 + minB;
+
+        return totalA - totalB;
     });
 }
 
@@ -730,23 +739,25 @@ function getBookingDateTime(booking) {
     if (dateParts.length !== 3 || timeParts.length < 2) return null;
 
     const day = Number(dateParts[0]);
-    const month = Number(dateParts[1]) - 1;
+    const month = Number(dateParts[1]);
     const year = Number(dateParts[2]);
 
     const hours = Number(timeParts[0]);
     const minutes = Number(timeParts[1]);
 
-    const date = new Date(
-        year,
-        month,
-        day,
-        hours,
-        minutes
+    if (
+        !Number.isFinite(day) ||
+        !Number.isFinite(month) ||
+        !Number.isFinite(year) ||
+        !Number.isFinite(hours) ||
+        !Number.isFinite(minutes)
+    ) {
+        return null;
+    }
+
+    return (
+        (((year * 12 + month) * 31 + day) * 24 + hours) * 60 + minutes
     );
-
-    if (isNaN(date.getTime())) return null;
-
-    return date;
 }
 
 async function refreshAdminMenu() {
@@ -760,12 +771,9 @@ async function refreshAdminMenu() {
         allServices.forEach(s => serviceMap[s.key] = s.name.ru);
 
         if (session.currentAdminView === 'today') {
-            const now = new Date();
-
-            const todayStr =
-                `${String(now.getDate()).padStart(2, '0')}.` +
-                `${String(now.getMonth() + 1).padStart(2, '0')}.` +
-                `${now.getFullYear()}`;
+            const tashkentNow = getTashkentNow();
+const todayStr = tashkentNow.dateText;
+                
 
             // Получаем только активные записи на сегодня
             const bookingsRaw = await Booking.find({
@@ -774,13 +782,16 @@ async function refreshAdminMenu() {
             });
 
             // Оставляем только записи, которые ещё не прошли
-            const futureBookings = bookingsRaw.filter(b => {
-                const bookingDate = getBookingDateTime(b);
+           const nowTotalMinutes =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day) * 24 + tashkentNow.hours) * 60 + tashkentNow.minutes;
 
-                if (!bookingDate) return false;
+const futureBookings = bookingsRaw.filter(b => {
+    const bookingDate = getBookingDateTime(b);
 
-                return bookingDate > now;
-            });
+    if (bookingDate === null) return false;
+
+    return bookingDate > nowTotalMinutes;
+});
 
             // Ближайшая запись сверху
             const sorted = futureBookings.sort((a, b) => {
@@ -823,10 +834,7 @@ async function refreshAdminMenu() {
                     `⏰ Время: ${b.time} (${b.username})\n\n`;
 
                 // Кнопки сразу под конкретной записью
-                kb.text(
-                    `🔄 Перенести №${index + 1}`,
-                    `admin_resch_${b._id}`
-                );
+               
 
                 kb.text(
                     `❌ Отменить №${index + 1}`,
@@ -859,16 +867,19 @@ async function refreshAdminMenu() {
                 status: { $in: ["pending", "confirmed"] }
             });
 
-            const now = new Date();
+            const tashkentNow = getTashkentNow();
 
-            // Оставляем только будущие записи
-            const futureBookings = bookingsRaw.filter(b => {
-                const bookingDate = getBookingDateTime(b);
+const nowTotalMinutes =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day) * 24 + tashkentNow.hours) * 60 + tashkentNow.minutes;
 
-                if (!bookingDate) return false;
+// Оставляем только будущие записи
+const futureBookings = bookingsRaw.filter(b => {
+    const bookingDate = getBookingDateTime(b);
 
-                return bookingDate > now;
-            });
+    if (bookingDate === null) return false;
+
+    return bookingDate > nowTotalMinutes;
+});
 
             // Сортируем: ближайшая запись сверху
             futureBookings.sort((a, b) => {
@@ -932,10 +943,7 @@ async function refreshAdminMenu() {
                     `👤 ${b.username}\n\n`;
 
                 // Кнопки сразу под конкретной записью
-                kb.text(
-                    "🔄 Перенести",
-                    `admin_resch_${b._id}`
-                );
+             
 
                 kb.text(
                     "❌ Отменить",
@@ -980,7 +988,7 @@ async function refreshAdminMenu() {
             await bot.api.editMessageText(
                 MASTER_CHAT_ID,
                 session.adminMenuMessageId,
-                "👨‍💻 **Панель управления мастером**\n\n" +
+                "👨‍💻 Панель управления Мастера\n\n" +
                 "Здесь вы можете управлять своими записями.\n" +
                 "Выберите действие:",
                 {
@@ -993,6 +1001,58 @@ async function refreshAdminMenu() {
     } catch (e) {
         console.error("Error in refreshAdminMenu:", e);
     }
+}
+
+
+async function renderNewRequests(ctx) {
+    const bookings = await Booking.find({
+        status: "pending"
+    }).sort({ _id: 1 });
+
+    const kb = new InlineKeyboard();
+
+    if (bookings.length === 0) {
+        kb.text("⬅️ Назад", "back_to_admin");
+
+        return await ctx.editMessageText(
+            "🔔 **Новые заявки**\n\n" +
+            "Новых заявок нет. ✨",
+            {
+                parse_mode: "Markdown",
+                reply_markup: kb
+            }
+        );
+    }
+
+    let text = `🔔 **НОВЫЕ ЗАЯВКИ (${bookings.length})**\n\n`;
+
+    bookings.forEach((b) => {
+        text +=
+            `🔔 **НОВАЯ ЗАЯВКА!**\n\n` +
+            `👤 Имя: ${b.clientName}\n` +
+            `🔗 ТГ: ${b.username || "Скрыт"}\n` +
+            `💅 Услуга: ${b.serviceNameRu || "Услуга"}\n` +
+            `📅 Дата: ${b.dateText}\n` +
+            `🕐 Время: ${b.time}\n\n` +
+            `━━━━━━━━━━━━━━\n\n`;
+
+        kb.text(
+            "✅ Подтвердить",
+            `admin_conf_${b._id}`
+        ).row();
+
+        kb.text(
+            "❌ Отклонить",
+            `admin_rej_${b._id}`
+        ).row();
+    });
+
+    kb.text("⬅️ Назад", "back_to_admin");
+
+    return await ctx.editMessageText(text, {
+        parse_mode: "Markdown",
+        reply_markup: kb
+    });
 }
 
 async function smartUpdate(ctx, newImageUrl, newCaption, newKeyboard) {
@@ -1051,12 +1111,14 @@ bot.callbackQuery("ignore", async (ctx) => {
 
 function getAdminKeyboard() {
     return new InlineKeyboard()
-        .text("📊 Статистика", "admin_statistics").row()
-        .text("📋 Будущие записи", "admin_all_bookings").row()
+        .text("🔔 Новые заявки", "admin_new_requests").row()
+        .text("⏳ Ожидаемые записи", "admin_all_bookings").row()
         .text("📅 На сегодня", "admin_today_bookings").row()
+        .text("_", "ignore").row()
+        .text("📊 Статистика", "admin_statistics").row()
+        .text("⚙️ Настройки", "admin_settings").row() 
         .text("📢 Сделать рассылку", "admin_broadcast_init").row()
-        .text("📜 История рассылок", "admin_broadcast_history").row()
-        .text("⚙️ Настройки", "admin_settings"); 
+        .text("📜 История рассылок", "admin_broadcast_history");
 }
 
 // ТЕПЕРЬ ФУНКЦИЯ АСИНХРОННАЯ, ТАК КАК БЕРЕТ ДАННЫЕ ИЗ БД!
@@ -1084,8 +1146,7 @@ function createCalendarKeyboard(year, month, serviceKey, lang) {
     if (month < 0) { month = 11; year -= 1; }
     if (month > 11) { month = 0; year += 1; }
 
-    const t = LANG[lang];
-    const keyboard = new InlineKeyboard();
+const t = LANG[lang] || LANG.ru;    const keyboard = new InlineKeyboard();
     keyboard.text(`🗓 ${MONTH_NAMES[month]} ${year}`, "ignore").row();
 
     const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
@@ -1095,14 +1156,17 @@ function createCalendarKeyboard(year, month, serviceKey, lang) {
     const firstDayIndex = new Date(year, month, 1).getDay();
     const startDay = firstDayIndex === 0 ? 6 : firstDayIndex - 1; 
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const today = new Date();
-    today.setHours(0,0,0,0);
+    const tashkentNow = getTashkentNow();
+const todayTotal =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day));
 
     for (let i = 0; i < startDay; i++) { keyboard.text(" ", "ignore"); }
     let currentColumn = startDay;
     for (let day = 1; day <= daysInMonth; day++) {
-        const cellDate = new Date(year, month, day);
-        if (cellDate < today) {
+        const cellTotal =
+    (((year * 12 + (month + 1)) * 31 + day));
+
+if (cellTotal < todayTotal) {
             keyboard.text(`🔒`, "ignore");
         } else {
             keyboard.text(`${day}`, `date_${year}_${month}_${day}`);
@@ -1307,6 +1371,16 @@ bot.callbackQuery("admin_edit_main_menu", async (ctx) => {
         parse_mode: "Markdown",
         reply_markup: kb
     });
+});
+
+bot.callbackQuery("admin_new_requests", async (ctx) => {
+    await ctx.answerCallbackQuery();
+
+    try {
+        await renderNewRequests(ctx);
+    } catch (err) {
+        console.error("Ошибка admin_new_requests:", err);
+    }
 });
 
 // Админ нажал "Изменить фото"
@@ -1527,7 +1601,7 @@ bot.callbackQuery("admin_settings", async (ctx) => {
 bot.callbackQuery("back_to_admin_main", async (ctx) => {
     await ctx.answerCallbackQuery().catch(()=>{});
     try {
-        await ctx.editMessageText("👋 Добро пожаловать в панель управления, Мастер!", {
+        await ctx.editMessageText("👨‍💻 Панель управления Мастера\n\nВыберите действие:",  {
             reply_markup: getAdminKeyboard()
         });
     } catch (e) {}
@@ -1764,36 +1838,27 @@ bot.callbackQuery("admin_all_bookings", async (ctx) => {
             status: { $in: ["pending", "confirmed"] }
         });
 
-        const now = new Date();
+const tashkentNow = getTashkentNow();
 
+const nowTotalMinutes =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day) * 24 + tashkentNow.hours) * 60 + tashkentNow.minutes;
+
+// Используем общую функцию даты записи
+function getBookingDate(b) {
+    return getBookingDateTime(b);
+};
         // Превращаем дату + время записи в Date
-        function getBookingDate(b) {
-            if (!b.dateText || !b.time) return null;
-
-            const dateParts = b.dateText.split(".").map(Number);
-            const timeParts = b.time.split(":").map(Number);
-
-            if (dateParts.length !== 3 || timeParts.length < 2) {
-                return null;
-            }
-
-            const [day, month, year] = dateParts;
-            const [hours, minutes] = timeParts;
-
-            return new Date(
-                year,
-                month - 1,
-                day,
-                hours,
-                minutes
-            );
-        }
+      
+        
 
         // Только БУДУЩИЕ записи
-        const futureBookings = bookings.filter(b => {
-            const bookingDate = getBookingDate(b);
-            return bookingDate && bookingDate > now;
-        });
+      const futureBookings = bookings.filter(b => {
+    const bookingDate = getBookingDate(b);
+
+    if (bookingDate === null) return false;
+
+    return bookingDate > nowTotalMinutes;
+});
 
         // Сначала ближайшие
         futureBookings.sort((a, b) => {
@@ -1842,10 +1907,7 @@ futureBookings
         // Кнопки в одну строку:
         // 🔄 Перенести | 💬 Сообщение | ❌ Отменить
         // Кнопки в одной строке
-kb.text(
-    `🔄 Перенести №${index + 1}`,
-    `admin_resch_${b._id}`
-);
+
 
 kb.text(
     `❌ Отменить №${index + 1}`,
@@ -1870,12 +1932,8 @@ kb.text(
 bot.callbackQuery("admin_today_bookings", async (ctx) => {
     await ctx.answerCallbackQuery();
 
-    const now = new Date();
-
-    const todayStr =
-        `${String(now.getDate()).padStart(2, '0')}.` +
-        `${String(now.getMonth() + 1).padStart(2, '0')}.` +
-        `${now.getFullYear()}`;
+    const tashkentNow = getTashkentNow();
+    const todayStr = tashkentNow.dateText;
 
     try {
         // Подгружаем названия услуг
@@ -1890,11 +1948,21 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
             dateText: todayStr,
             status: { $in: ["pending", "confirmed"] }
         });
+// Убираем записи, время которых уже прошло
+const currentMinutes =
+    tashkentNow.hours * 60 + tashkentNow.minutes;
+
+const activeBookings = bookings.filter((b) => {
+    const [hours, minutes] = b.time.split(":").map(Number);
+    const bookingMinutes = hours * 60 + minutes;
+
+    return bookingMinutes > currentMinutes;
+});
 
         const kb = new InlineKeyboard();
 
-        if (bookings.length === 0) {
-            kb.text("⬅️ Назад", "back_to_admin");
+if (activeBookings.length === 0) {
+        kb.text("⬅️ Назад", "back_to_admin");
 
             return await ctx.editMessageText(
                 `📅 **Расписание на сегодня (${todayStr}):**\n\n` +
@@ -1907,72 +1975,36 @@ bot.callbackQuery("admin_today_bookings", async (ctx) => {
         }
 
         // Сортируем по времени
-        bookings.sort((a, b) => {
-            const getTime = (booking) => {
-                const [hours, minutes] = booking.time.split(":").map(Number);
+   // Сортируем по времени
+activeBookings.sort((a, b) => {
+    const [hoursA, minutesA] = a.time.split(":").map(Number);
+    const [hoursB, minutesB] = b.time.split(":").map(Number);
 
-                return new Date(
-                    now.getFullYear(),
-                    now.getMonth(),
-                    now.getDate(),
-                    hours,
-                    minutes
-                );
-            };
-
-            return getTime(a) - getTime(b);
-        });
+    return (hoursA * 60 + minutesA) - (hoursB * 60 + minutesB);
+});
 
         let text =
-            `📅 **Расписание на сегодня (${todayStr}) - ${bookings.length} шт.:**\n\n`;
+            `📅 **Расписание на сегодня (${todayStr}) - ${activeBookings.length} шт.:**\n\n`;
 
-        bookings.forEach((b, index) => {
+        activeBookings.forEach((b, index) => {
             const serviceName =
                 serviceMap[b.serviceKey] ||
                 b.serviceNameRu ||
                 "Удаленная услуга";
 
-            const [hours, minutes] = b.time.split(":").map(Number);
+           
 
-            const bookingDate = new Date(
-                now.getFullYear(),
-                now.getMonth(),
-                now.getDate(),
-                hours,
-                minutes
-            );
+ const status =
+    b.status === "pending" ? "⏳" : "✅";
 
-            const isPassed = bookingDate <= now;
+text +=
+    `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n` +
+    `⏰ ${b.time} (${b.username})\n\n`;
 
-            if (isPassed) {
-                text +=
-                    `${index + 1}. ⌛ **ПРОШЛО**\n` +
-                    `👤 **${b.clientName}** | ${serviceName}\n` +
-                    `⏰ ${b.time} (${b.username})\n\n`;
-
-            } else {
-                const status =
-                    b.status === "pending" ? "⏳" : "✅";
-
-                text +=
-                    `${index + 1}. ${status} **${b.clientName}** | ${serviceName}\n` +
-                    `⏰ ${b.time} (${b.username})\n\n`;
-
-                // Кнопки только для будущих записей
-                kb.text(
-                    `🔄 Перенести №${index + 1}`,
-                    `admin_resch_${b._id}`
-                );
-
-                kb.text(
-                    `❌ Отменить №${index + 1}`,
-                    `admin_rej_${b._id}`
-                ).row();
-
-                // Отдельная кнопка сообщения
-                
-                
-            }
+kb.text(
+    `❌ Отменить №${index + 1}`,
+    `admin_rej_${b._id}`
+).row();
         });
 
         kb.text("⬅️ Назад", "back_to_admin");
@@ -2013,7 +2045,7 @@ bot.callbackQuery(/^admin_msg_/, async (ctx) => {
 bot.callbackQuery("back_to_admin", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (clientSessions[ctx.from.id]) clientSessions[ctx.from.id].awaitingBroadcast = false;
-    await ctx.editMessageText("👨‍💻 **Панель управления мастером**\n\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
+    await ctx.editMessageText("👨‍💻 Панель управления Мастера\n\nВыберите действие:", { parse_mode: "Markdown", reply_markup: getAdminKeyboard() });
 });
 
 // ====== ЛОГИКА ПЕРЕНОСА (МАСТЕР) ======
@@ -2227,64 +2259,133 @@ bot.callbackQuery(/^admintime_/, async (ctx) => {
 
 // ==========================================
 // ОТВЕТ КЛИЕНТА НА ПЕРЕНОС (СОГЛАСИЕ)
-// ==========================================
+
 bot.callbackQuery(/^client_acc_resch_/, async (ctx) => {
-    // Убираем часики на кнопке
     await ctx.answerCallbackQuery().catch(() => {});
-    
-    // Разбираем нашу новую КОРОТКУЮ строку: client_acc_resch_bId_YYYY-MM-DD_HH:MM
-    const parts = ctx.callbackQuery.data.replace("client_acc_resch_", "").split("_");
+
+    const parts = ctx.callbackQuery.data
+        .replace("client_acc_resch_", "")
+        .split("_");
+
     const bId = parts[0];
     const newDate = parts[1]; // YYYY-MM-DD
     const newTime = parts[2]; // HH:MM
-    
-    // Самостоятельно собираем красивую дату для текста (чтобы не передавать ее в кнопке)
+
     const dateParts = newDate.split("-");
     const newDateText = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
 
     try {
         const booking = await Booking.findById(bId);
-        if (!booking) return ctx.answerCallbackQuery({ text: "Запись не найдена или удалена!", show_alert: true });
 
-        // Удаляем сообщение с вопросом у клиента
-        try { await ctx.deleteMessage(); } catch(e){}
+        if (!booking) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Запись не найдена или уже удалена!",
+                show_alert: true
+            });
+        }
 
-        // ОБНОВЛЯЕМ ДАННЫЕ В БД (Теперь time передается корректно!)
+        // Проверяем, что именно этот клиент принимает перенос
+        if (String(booking.userId) !== String(ctx.from.id)) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Эта запись принадлежит другому клиенту.",
+                show_alert: true
+            });
+        }
+
+        // ВАЖНО:
+        // ещё раз проверяем, не занял ли кто-то новое время,
+        // пока клиент думал над предложением мастера.
+        const conflict = await Booking.exists({
+            date: newDate,
+            time: newTime,
+            status: { $in: ["pending", "confirmed"] },
+            _id: { $ne: bId }
+        });
+
+        if (conflict) {
+            return ctx.answerCallbackQuery({
+                text: "❌ Это время уже заняли. Выберите другое время.",
+                show_alert: true
+            });
+        }
+
+        // ==========================================
+        // ПЕРЕНОСИМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ
+        // ==========================================
+
         booking.date = newDate;
         booking.dateText = newDateText;
         booking.time = newTime;
         booking.status = "confirmed";
-        await booking.save(); 
 
-        // Безопасно достаем название услуги
-        let serviceNameRu = "Услуга";
-        let serviceNameUz = "Xizmat";
+        // Чтобы напоминание отправилось заново
+        booking.reminderSent = false;
+
+        await booking.save();
+
+        // Удаляем сообщение с кнопками только ПОСЛЕ успешного сохранения
         try {
-            const service = await Service.findOne({ key: booking.serviceKey });
-            if (service) {
-                serviceNameRu = service.name.ru;
-                serviceNameUz = service.name.uz || service.name.ru;
-            }
+            await ctx.deleteMessage();
         } catch (e) {}
 
-        // Отправляем уведомление клиенту
-        const lang = clientSessions[ctx.from.id]?.lang || "ru";
-        const msgClient = lang === "ru"
-            ? `✅ **Вы успешно подтвердили перенос!**\n\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: **${newDateText}**\n🕐 Новое время: **${newTime}**\n\nЖдем вас! ✨`
-            : `✅ **Siz ko'chirishni muvaffaqiyatli tasdiqladingiz!**\n\n💅 Xizmat: ${serviceNameUz}\n📅 Yangi sana: **${newDateText}**\n🕐 Yangi vaqt: **${newTime}**\n\nSizni kutamiz! ✨`;
-        
-        await ctx.reply(msgClient, { parse_mode: "Markdown" });
+        // Получаем название услуги
+        let serviceNameRu = booking.serviceNameRu;
+        let serviceNameUz = booking.serviceNameUz;
 
-        // Отправляем уведомление мастеру
+        try {
+            const service = await Service.findOne({
+                key: booking.serviceKey
+            });
+
+            if (service) {
+                serviceNameRu = service.nameRu || serviceNameRu;
+                serviceNameUz = service.nameUz || serviceNameUz;
+            }
+        } catch (e) {
+            console.error("Ошибка получения услуги:", e);
+        }
+
+        const lang = clientSessions[ctx.from.id]?.lang || "ru";
+
+        // Сообщение клиенту
+        const msgClient = lang === "ru"
+            ? `✅ **Запись перенесена!**\n\n` +
+              `💅 Услуга: ${serviceNameRu}\n` +
+              `📅 Дата: **${newDateText}**\n` +
+              `🕐 Время: **${newTime}**\n\n` +
+              `Мастер подтвердил новое время. Ждём вас!`
+            : `✅ **Yozuvingiz ko'chirildi!**\n\n` +
+              `💅 Xizmat: ${serviceNameUz}\n` +
+              `📅 Sana: **${newDateText}**\n` +
+              `🕐 Vaqt: **${newTime}**\n\n` +
+              `Usta yangi vaqtni tasdiqladi. Sizni kutamiz!`;
+
+        await ctx.reply(msgClient, {
+            parse_mode: "Markdown"
+        });
+
+        // Сообщение мастеру
         await bot.api.sendMessage(
-            MASTER_CHAT_ID, 
-            `✅ **Клиент СОГЛАСИЛСЯ на перенос**\n\n👤 Имя: ${booking.clientName}\n💅 Услуга: ${serviceNameRu}\n📅 Новая дата: ${newDateText}\n🕐 Новое время: ${newTime}`, 
-            { parse_mode: "Markdown" }
+            MASTER_CHAT_ID,
+            `✅ **Клиент согласился на перенос**\n\n` +
+            `👤 Клиент: ${booking.clientName}\n` +
+            `💅 Услуга: ${serviceNameRu}\n` +
+            `📅 Новая дата: **${newDateText}**\n` +
+            `🕐 Новое время: **${newTime}**`,
+            {
+                parse_mode: "Markdown"
+            }
         );
 
     } catch (e) {
-        console.error("❌ ОШИБКА ПРИ ПОДТВЕРЖДЕНИИ ПЕРЕНОСА КЛИЕНТОМ:", e);
-        await ctx.reply("Произошла ошибка при сохранении. Обратитесь к администратору.").catch(()=>{});
+        console.error(
+            "❌ ОШИБКА ПРИ ПОДТВЕРЖДЕНИИ ПЕРЕНОСА КЛИЕНТОМ:",
+            e
+        );
+
+        await ctx.reply(
+            "Произошла ошибка при сохранении. Обратитесь к администратору."
+        ).catch(() => {});
     }
 });
 
@@ -2836,35 +2937,7 @@ bot.callbackQuery(/^view_service_/, async (ctx) => {
 // ==========================================
 // ОТКРЫТИЕ КАЛЕНДАРЯ ДЛЯ ВЫБОРА ДАТЫ
 // ==========================================
-bot.callbackQuery(/^open_calendar_/, async (ctx) => {
-    await ctx.answerCallbackQuery().catch(() => {});
-    
-    // Получаем ID услуги из базы MongoDB
-    const serviceId = ctx.callbackQuery.data.replace("open_calendar_", "");
-    const lang = clientSessions[ctx.from.id]?.lang || "ru";
 
-    // Сохраняем ID выбранной услуги в сессию клиента
-    if (!clientSessions[ctx.from.id]) {
-        clientSessions[ctx.from.id] = { lang: lang };
-    }
-    clientSessions[ctx.from.id].serviceKey = serviceId;
-
-    // Определяем текущий месяц и год для календаря
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-
-    // Вызываем твою готовую функцию генерации календаря
-    const kb = createCalendarKeyboard(year, month, serviceId, lang);
-
-    const text = lang === "ru" 
-        ? "📅 <b>Выберите удобную дату:</b>" 
-        : "📅 <b>Qulay sanani tanlang:</b>";
-
-    // Убираем карточку с фото и показываем календарь
-    try { if (ctx.callbackQuery.message) await ctx.deleteMessage(); } catch (e) {}
-    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
-});
 
 bot.callbackQuery(/^m_/, async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -3028,9 +3101,9 @@ bot.callbackQuery(/^open_calendar_/, async (ctx) => {
     const lang = clientSessions[userId].lang;
     clientSessions[userId].serviceKey = serviceId; // Сохраняем выбранную услугу
 
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
+    const tashkentNow = getTashkentNow();
+const year = tashkentNow.year;
+const month = tashkentNow.month - 1;
 
     const kb = createCalendarKeyboard(year, month, serviceId, lang);
 
@@ -3062,6 +3135,38 @@ bot.callbackQuery(/^m_/, async (ctx) => {
 
 
 
+function getTashkentNow() {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Tashkent",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+    }).formatToParts(new Date());
+
+    const get = (type) =>
+        parts.find(p => p.type === type)?.value;
+
+    return {
+        year: Number(get("year")),
+        month: Number(get("month")),
+        day: Number(get("day")),
+        hours: Number(get("hour")),
+        minutes: Number(get("minute")),
+        seconds: Number(get("second")),
+
+        dateText: `${get("day")}.${get("month")}.${get("year")}`,
+
+        totalMinutes:
+            Number(get("hour")) * 60 +
+            Number(get("minute"))
+    };
+}
+
+
 
 
 // ==========================================
@@ -3086,23 +3191,47 @@ bot.callbackQuery(/^date_/, async (ctx) => {
     session.date = `${parts[0]}-${mString}-${dString}`;
     session.dateText = `${dString}.${mString}.${parts[0]}`;
 
-    try {
-        const activeBookings = await Booking.find({ 
-            date: session.date, 
-            status: { $in: ["pending", "confirmed"] } 
-        });
-        const bookedTimes = activeBookings.map(b => b.time);
+try { 
+    const activeBookings = await Booking.find({  
+        date: session.date,  
+        status: { $in: ["pending", "confirmed"] }  
+    }); 
 
-        const kb = new InlineKeyboard();
-        TIME_SLOTS.forEach((time, index) => {
-            const isBooked = bookedTimes.includes(time);
-            if (isBooked) {
-                kb.text(`❌ ${time}`, `slot_already_booked`);
-            } else {
-                kb.text(time, `book_time_${time}`);
-            }
-            if ((index + 1) % 2 === 0) kb.row();
-        });
+    const bookedTimes = activeBookings.map(b => b.time); 
+
+    const kb = new InlineKeyboard();
+
+    // Текущее время именно по Ташкенту
+    const tashkentNow = getTashkentNow();
+
+    TIME_SLOTS.forEach((time, index) => { 
+        const isBooked = bookedTimes.includes(time);
+
+        // Переводим время слота в минуты
+        const [hours, minutes] = time.split(":").map(Number);
+        const slotMinutes = hours * 60 + minutes;
+
+        // Закрываем прошедшие слоты только для сегодняшней даты
+        const todayIso =
+    `${tashkentNow.year}-${String(tashkentNow.month).padStart(2, "0")}-${String(tashkentNow.day).padStart(2, "0")}`;
+
+const nowMinutes =
+    tashkentNow.hours * 60 + tashkentNow.minutes;
+
+const isPast =
+    session.date === todayIso &&
+    slotMinutes <= nowMinutes;
+
+        if (isBooked) { 
+            kb.text(`❌ ${time}`, `slot_already_booked`); 
+        } else if (isPast) {
+            kb.text(`🔒 ${time}`, `slot_already_past`);
+        } else { 
+            kb.text(time, `book_time_${time}`); 
+        }
+
+        if ((index + 1) % 2 === 0) kb.row(); 
+    });
         kb.row().text(LANG[lang].back, `open_calendar_${session.serviceKey}`);
 
         const service = await Service.findById(session.serviceKey);
@@ -3122,9 +3251,15 @@ bot.callbackQuery(/^date_/, async (ctx) => {
     }
 });
 
-bot.callbackQuery("slot_already_booked", async (ctx) => {
+bot.callbackQuery("slot_already_past", async (ctx) => {
     const lang = clientSessions[ctx.from.id]?.lang || "ru";
-    await ctx.answerCallbackQuery({ text: lang === "ru" ? "⚠️ Это время уже занято!" : "⚠️ Bu vaqt allaqochon band qilingan!", show_alert: true });
+
+    await ctx.answerCallbackQuery({
+        text: lang === "ru"
+            ? "🔒 Это время уже прошло!"
+            : "🔒 Bu vaqt allaqachon o'tib ketgan!",
+        show_alert: true
+    });
 });
 
 // ==========================================
@@ -3144,6 +3279,23 @@ bot.callbackQuery(/^book_time_/, async (ctx) => {
     }
     
     const lang = session.lang || "ru";
+
+    const tashkentNow = getTashkentNow();
+
+const [hours, minutes] = time.split(":").map(Number);
+const slotMinutes = hours * 60 + minutes;
+
+const isPast = session.date === tashkentNow.date &&
+               slotMinutes <= tashkentNow.minutes;
+
+if (isPast) {
+    return ctx.answerCallbackQuery({
+        text: lang === "ru"
+            ? "🔒 Это время уже прошло! Выберите другое."
+            : "🔒 Bu vaqt allaqachon o'tib ketgan! Boshqa vaqtni tanlang.",
+        show_alert: true
+    }).catch(() => {});
+}
 
     try {
         const isBooked = await Booking.exists({ 
@@ -3172,6 +3324,38 @@ bot.callbackQuery(/^book_time_/, async (ctx) => {
     }
 });
 
+async function showMasterResultAndMenu(ctx, resultText) {
+    try {
+        // Показываем результат на месте заявки
+        await ctx.editMessageText(resultText, {
+            parse_mode: "Markdown"
+        });
+
+        // Сразу отправляем главное меню отдельным сообщением
+        const menuMsg = await bot.api.sendMessage(
+            MASTER_CHAT_ID,
+            "👨‍💻 **Панель управления мастером**\n\nВыберите действие:",
+            {
+                parse_mode: "Markdown",
+                reply_markup: getAdminKeyboard()
+            }
+        );
+
+        // Через 10 секунд удаляем сообщение с результатом
+        setTimeout(async () => {
+            try {
+                await bot.api.deleteMessage(
+                    MASTER_CHAT_ID,
+                    ctx.callbackQuery.message.message_id
+                );
+            } catch (e) {}
+        }, 10000);
+
+    } catch (err) {
+        console.error("Ошибка показа результата мастеру:", err);
+    }
+}
+
 // ==========================================
 // 23. ПРИНЯТИЕ / ОТКЛОНЕНИЕ ЗАЯВКИ МАСТЕРОМ
 // ==========================================
@@ -3191,12 +3375,17 @@ bot.callbackQuery(/^admin_conf_/, async (ctx) => {
             try { await bot.api.deleteMessage(targetUserId, booking.pendingMessageId); } catch(e){}
         }
         
-        await ctx.editMessageText(`✅ **ВЫ ПОДТВЕРДИЛИ ЗАПИСЬ**\n\nКлиент: ${booking.clientName}\nДата: ${booking.dateText} в ${booking.time}`, { parse_mode: "Markdown" });
-        await ctx.answerCallbackQuery({ text: "Подтверждено!", show_alert: false });
-       
-        setTimeout(async () => { 
-            try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} 
-        }, 30000);
+        await ctx.answerCallbackQuery({
+    text: "Подтверждено!",
+    show_alert: false
+});
+
+await showMasterResultAndMenu(
+    ctx,
+    `✅ **ВЫ ПОДТВЕРДИЛИ ЗАПИСЬ**\n\n` +
+    `Клиент: ${booking.clientName}\n` +
+    `Дата: ${booking.dateText} в ${booking.time}`
+);
        
         try {
             const userLang = clientSessions[targetUserId]?.lang || "ru";
@@ -3258,9 +3447,13 @@ bot.callbackQuery(/^master_reason_/, async (ctx) => {
         booking.cancelledBy = "master";
         await booking.save();
         
-        await ctx.editMessageText(`❌ **Запись отменена**\n\nПричина отправлена клиенту: ${reason}`, { parse_mode: "Markdown" });
-        setTimeout(async () => { try { await bot.api.deleteMessage(MASTER_CHAT_ID, ctx.callbackQuery.message.message_id); } catch(e){} }, 10000);
-        
+await showMasterResultAndMenu(
+    ctx,
+    `❌ **ЗАПИСЬ ОТМЕНЕНА**\n\n` +
+    `Клиент: ${booking.clientName}\n` +
+    `Дата: ${booking.dateText} в ${booking.time}\n\n` +
+    `Причина: ${reason}`
+);        
         try {
             const notifyMsg = userLang === "ru"
                 ? `❌ **К сожалению, мастер отменил вашу запись.**\n\n💬 **Причина:** ${reason}\n\nПожалуйста, выберите другое время.`
@@ -3294,36 +3487,21 @@ bot.callbackQuery("view_my_bookings", async (ctx) => {
             status: { $in: ["pending", "confirmed"] }
         });
 
-        const now = new Date();
+      const tashkentNow = getTashkentNow();
 
-        // Оставляем только будущие записи
-        const futureBookings = bookingsRaw.filter(b => {
-            if (!b.dateText || !b.time) return false;
+const nowTotalMinutes =
+    (((tashkentNow.year * 12 + tashkentNow.month) * 31 + tashkentNow.day) * 24 +
+        tashkentNow.hours) * 60 +
+    tashkentNow.minutes;
 
-            const dateParts = b.dateText.split(".");
-            const timeParts = b.time.split(":");
+// Оставляем только будущие записи
+const futureBookings = bookingsRaw.filter(b => {
+    const bookingDate = getBookingDateTime(b);
 
-            if (dateParts.length !== 3 || timeParts.length < 2) {
-                return false;
-            }
+    if (bookingDate === null) return false;
 
-            const day = parseInt(dateParts[0]);
-            const month = parseInt(dateParts[1]) - 1;
-            const year = parseInt(dateParts[2]);
-
-            const hours = parseInt(timeParts[0]);
-            const minutes = parseInt(timeParts[1]);
-
-            const bookingDate = new Date(
-                year,
-                month,
-                day,
-                hours,
-                minutes
-            );
-
-            return bookingDate > now;
-        });
+    return bookingDate > nowTotalMinutes;
+});
 
         // Удаляем старое сообщение с фотографией
         try {
@@ -3351,22 +3529,10 @@ bot.callbackQuery("view_my_bookings", async (ctx) => {
         }
 
         // Сортируем: ближайшая запись сверху
-        futureBookings.sort((a, b) => {
-            const getDate = (booking) => {
-                const dateParts = booking.dateText.split(".");
-                const timeParts = booking.time.split(":");
-
-                return new Date(
-                    parseInt(dateParts[2]),
-                    parseInt(dateParts[1]) - 1,
-                    parseInt(dateParts[0]),
-                    parseInt(timeParts[0]),
-                    parseInt(timeParts[1])
-                );
-            };
-
-            return getDate(a) - getDate(b);
-        });
+       // Сортируем: ближайшая запись сверху
+futureBookings.sort((a, b) => {
+    return getBookingDateTime(a) - getBookingDateTime(b);
+});
 
         // Получаем услуги
         const services = await Service.find();
