@@ -90,11 +90,11 @@ async function initDatabase() {
     }
 }
 
-const DB_USER = "baxtiyorovusmon30_db_user";
-const DB_PASS = encodeURIComponent("7MSV5O9ttCpiZCHL");
-const MONGO_URI = `mongodb+srv://${encodeURIComponent(DB_USER)}:${encodeURIComponent(DB_PASS)}@cluster0.wdiu32k.mongodb.net/salon_db?retryWrites=true&w=majority&appName=Cluster0`;
-const BOT_TOKEN = "8944042117:AAHnkgvHQrggD-6-JeQmt6RQN2zwyhAMFIA";
-const MASTER_CHAT_ID = "1459629617";
+
+require('dotenv').config();
+const MONGO_URI = process.env.MONGO_URI;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MASTER_CHAT_ID = process.env.MASTER_CHAT_ID;
 const bot = new Bot(BOT_TOKEN);
 
 mongoose.connect(MONGO_URI)
